@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Neutrino Remote
+Comment=Remote control for a Neutrino receiver
+Exec=neutrino-remote
+Icon=de.flk.NeutrinoRemote
+Terminal=false
+Categories=AudioVideo;Video;TV;
+Keywords=neutrino;remote;receiver;tv;
+StartupWMClass=de.flk.NeutrinoRemote

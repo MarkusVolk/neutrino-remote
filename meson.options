@@ -1,0 +1,2 @@
+option('gtk', type : 'boolean', value : true, description : 'Install the GTK 4 frontend')
+option('qt', type : 'feature', value : 'auto', description : 'Build the Qt 6 frontend')
