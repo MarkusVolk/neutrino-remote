@@ -17,6 +17,7 @@ ApplicationWindow {
 
     property string host: ""
     property string configFile: ""
+    property string listSide: "left"
     property string base: ""
     property var areas: []
     property var hot: null
@@ -325,6 +326,7 @@ ApplicationWindow {
     RowLayout {
         anchors.fill: parent
         spacing: 6
+        layoutDirection: root.listSide === "right" ? Qt.RightToLeft : Qt.LeftToRight
 
         ColumnLayout {
             id: sideBar
@@ -464,6 +466,7 @@ ApplicationWindow {
         var i = args.indexOf("--")
         var rest = args.slice(i >= 0 ? i + 1 : 1)
         configFile = rest.length > 1 ? rest[1] : ""
+        listSide = rest.length > 2 ? rest[2] : "left"
         fitToScreen()
         visible = true
         connectTo(rest.length > 0 ? rest[0] : "")

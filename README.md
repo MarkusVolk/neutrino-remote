@@ -9,7 +9,12 @@ The picture and the key areas are taken from the box itself (`Y_Tools_Rcsim.yhtm
 remote matches the box model. The address of the box is set in the header bar and kept in
 `~/.config/neutrino-remote/host`.
 
-    neutrino-remote [--gtk | --qt] [HOST]
+    neutrino-remote [--gtk | --qt] [--list-left | --list-right] [HOST]
+
+The channel list opens to the left of the remote, so a window anchored at the right edge of
+the screen grows to the left and the remote stays where it is. `--list-right` puts it on the
+other side for a window anchored at the left edge; the choice is kept in
+`~/.config/neutrino-remote/list`.
 
 There are two frontends: GTK 4 (Python) and Qt 6 (QML). The launcher picks the Qt one under
 KDE and the GTK one elsewhere, or the one that is installed.

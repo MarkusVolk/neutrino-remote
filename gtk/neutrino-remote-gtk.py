@@ -150,7 +150,7 @@ class RemoteView(Gtk.Widget):
 
 
 class Window(Gtk.ApplicationWindow):
-    def __init__(self, app, host):
+    def __init__(self, app, host, side):
         super().__init__(application=app, title="Neutrino Remote")
         self.aspect = 188 / 762
         self.connect("map", self.on_map)
@@ -191,8 +191,11 @@ class Window(Gtk.ApplicationWindow):
         self.side.set_visible(False)
 
         box = Gtk.Box(spacing=6)
-        box.append(self.side)
         box.append(left)
+        if side == "right":
+            box.append(self.side)
+        else:
+            box.prepend(self.side)
         self.set_child(box)
 
         keys = Gtk.EventControllerKey()
@@ -391,21 +394,23 @@ class Window(Gtk.ApplicationWindow):
 
 
 class App(Gtk.Application):
-    def __init__(self, host):
+    def __init__(self, host, side):
         super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.NON_UNIQUE)
         self.host = host
+        self.side = side
 
     def do_activate(self):
         provider = Gtk.CssProvider()
         provider.load_from_string(CSS)
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), provider,
                                                   Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-        Window(self, self.host).present()
+        Window(self, self.host, self.side).present()
 
 
 def main():
     host = sys.argv[1] if len(sys.argv) > 1 else remote.load_host()
-    return App(host).run([sys.argv[0]])
+    side = sys.argv[3] if len(sys.argv) > 3 else remote.load_side()
+    return App(host, side).run([sys.argv[0]])
 
 
 if __name__ == "__main__":

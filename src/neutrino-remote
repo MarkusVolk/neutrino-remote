@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""neutrino-remote [--gtk | --qt] [HOST] - remote control for a Neutrino box."""
+"""neutrino-remote [--gtk | --qt] [--list-left | --list-right] [HOST] - remote control for a Neutrino box."""
 
 import os
 import shutil
@@ -29,9 +29,18 @@ def main():
         if flag in args:
             args.remove(flag)
             choice = flag[2:]
+    side = remote.load_side()
+    for flag in ("--list-left", "--list-right"):
+        if flag in args:
+            args.remove(flag)
+            side = flag[7:]
+            remote.save_side(side)
     if args and args[0] in ("-h", "--help"):
         print(__doc__.strip())
         return 0
+    if len(args) > 1 or (args and args[0].startswith("-")):
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
 
     host = args[0].strip() if args else remote.load_host()
     remote.save_host(host)
@@ -44,7 +53,7 @@ def main():
         desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").upper()
         choice = "qt" if "qt" in found and ("KDE" in desktop or "gtk" not in found) else "gtk"
 
-    command = found[choice] + [host, remote.config_file()]
+    command = found[choice] + [host, remote.config_file(), side]
     os.execv(command[0], command)
 
 

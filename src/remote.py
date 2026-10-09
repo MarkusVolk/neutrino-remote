@@ -34,6 +34,26 @@ def save_host(host):
         handle.write(host.strip() + "\n")
 
 
+def side_file():
+    return os.path.join(os.path.dirname(config_file()), "list")
+
+
+def load_side():
+    try:
+        with open(side_file(), encoding="utf-8") as handle:
+            side = handle.read().strip()
+    except OSError:
+        side = ""
+    return side if side in ("left", "right") else "left"
+
+
+def save_side(side):
+    path = side_file()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(side + "\n")
+
+
 LOCAL_PORT = 8080
 LOCAL_RE = re.compile(r"^(localhost|127(\.\d+){3}|\[::1\])$", re.I)
 
