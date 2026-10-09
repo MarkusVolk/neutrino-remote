@@ -191,8 +191,8 @@ class Window(Gtk.ApplicationWindow):
         self.side.set_visible(False)
 
         box = Gtk.Box(spacing=6)
-        box.append(left)
         box.append(self.side)
+        box.append(left)
         self.set_child(box)
 
         keys = Gtk.EventControllerKey()
@@ -223,7 +223,9 @@ class Window(Gtk.ApplicationWindow):
         view_h = int(area.height * 0.6) - header
         width = max(260, int(view_h * self.aspect) + 24)
         if self.side.get_visible():
-            width += max(280, int(area.width * 0.15))
+            side = max(280, int(area.width * 0.15))
+            self.side.set_size_request(side, -1)
+            width += side + 6
         self.set_default_size(width, view_h + header)
 
     def get(self, path, callback, raw=False):

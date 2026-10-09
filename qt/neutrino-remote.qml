@@ -327,6 +327,46 @@ ApplicationWindow {
         spacing: 6
 
         ColumnLayout {
+            id: sideBar
+            visible: false
+            Layout.fillHeight: true
+            Layout.preferredWidth: Math.max(280, Math.round(Screen.width * 0.15)) - 6
+            spacing: 4
+
+            ComboBox {
+                id: bouquetBox
+                Layout.fillWidth: true
+                model: []
+                onActivated: function(index) { root.loadChannels(index) }
+            }
+
+            ListView {
+                id: channelList
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                model: ListModel { id: channelModel }
+                ScrollBar.vertical: ScrollBar {}
+                delegate: ItemDelegate {
+                    width: channelList.width
+                    onClicked: root.zapTo(model.cid)
+                    background: Rectangle { color: parent.hovered ? root.raised : "transparent" }
+                    contentItem: RowLayout {
+                        spacing: 8
+                        Text { text: model.number; color: root.dim; font.family: "monospace"; Layout.preferredWidth: 36; horizontalAlignment: Text.AlignRight }
+                        Text {
+                            text: model.name
+                            Layout.fillWidth: true
+                            elide: Text.ElideRight
+                            color: model.cid === root.currentChannel ? root.accent : root.fg
+                            font.bold: model.cid === root.currentChannel
+                        }
+                    }
+                }
+            }
+        }
+
+        ColumnLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: 0
@@ -408,45 +448,6 @@ ApplicationWindow {
             }
         }
 
-        ColumnLayout {
-            id: sideBar
-            visible: false
-            Layout.fillHeight: true
-            Layout.preferredWidth: Math.max(280, Math.round(Screen.width * 0.15)) - 6
-            spacing: 4
-
-            ComboBox {
-                id: bouquetBox
-                Layout.fillWidth: true
-                model: []
-                onActivated: function(index) { root.loadChannels(index) }
-            }
-
-            ListView {
-                id: channelList
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                model: ListModel { id: channelModel }
-                ScrollBar.vertical: ScrollBar {}
-                delegate: ItemDelegate {
-                    width: channelList.width
-                    onClicked: root.zapTo(model.cid)
-                    background: Rectangle { color: parent.hovered ? root.raised : "transparent" }
-                    contentItem: RowLayout {
-                        spacing: 8
-                        Text { text: model.number; color: root.dim; font.family: "monospace"; Layout.preferredWidth: 36; horizontalAlignment: Text.AlignRight }
-                        Text {
-                            text: model.name
-                            Layout.fillWidth: true
-                            elide: Text.ElideRight
-                            color: model.cid === root.currentChannel ? root.accent : root.fg
-                            font.bold: model.cid === root.currentChannel
-                        }
-                    }
-                }
-            }
-        }
     }
 
     Dialog {
