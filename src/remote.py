@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import shutil
 import urllib.parse
 
 DEFAULT_HOST = "192.168.0.1"
@@ -56,6 +57,23 @@ def save_side(side):
 
 LOCAL_PORT = 8080
 LOCAL_RE = re.compile(r"^(localhost|127(\.\d+){3}|\[::1\])$", re.I)
+LOCAL_PROGRAM = "neutrino-desktop"
+
+
+def is_local(host):
+    return bool(LOCAL_RE.match(host.strip().rstrip("/")))
+
+
+def local_start_command():
+    """How to start Neutrino on this machine so that it outlives the remote:
+    neutrino-desktop runs bwrap with --die-with-parent."""
+    if not shutil.which(LOCAL_PROGRAM):
+        return None
+    if shutil.which("systemd-run"):
+        return ["systemd-run", "--user", "--quiet", "--collect", LOCAL_PROGRAM]
+    if shutil.which("setsid"):
+        return ["setsid", "-f", LOCAL_PROGRAM]
+    return [LOCAL_PROGRAM]
 
 
 def base_url(host):
@@ -67,6 +85,34 @@ def base_url(host):
     if not re.match(r"^https?://", host):
         host = "http://" + host
     return host + "/"
+
+
+def cache_dir(host):
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    name = re.sub(r"[^\w.-]", "_", host.strip().rstrip("/"))
+    return os.path.join(base, "neutrino-remote", name)
+
+
+def save_cache(host, areas, image):
+    """Keep the remote of a box, so it can be shown while the box is off."""
+    path = cache_dir(host)
+    os.makedirs(path, exist_ok=True)
+    with open(os.path.join(path, "remote.json"), "w", encoding="utf-8") as handle:
+        json.dump(areas, handle)
+    with open(os.path.join(path, "remote.img"), "wb") as handle:
+        handle.write(image)
+
+
+def load_cache(host):
+    path = cache_dir(host)
+    try:
+        with open(os.path.join(path, "remote.json"), encoding="utf-8") as handle:
+            areas = json.load(handle)
+        with open(os.path.join(path, "remote.img"), "rb") as handle:
+            image = handle.read()
+    except (OSError, ValueError):
+        return None
+    return areas, image
 
 
 def parse_remote(html, base):

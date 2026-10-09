@@ -1,7 +1,10 @@
 #include <QGuiApplication>
 #include <QIcon>
 #include <QQmlApplicationEngine>
+#include <QQmlContext>
 #include <QUrl>
+
+#include "native.h"
 
 int main(int argc, char *argv[])
 {
@@ -13,6 +16,8 @@ int main(int argc, char *argv[])
 	app.setWindowIcon(QIcon::fromTheme(APP_ID));
 
 	QQmlApplicationEngine engine;
+	Native native;
+	engine.rootContext()->setContextProperty("native", &native);
 	QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app,
 			 [] { QCoreApplication::exit(1); }, Qt::QueuedConnection);
 	QString qml = qEnvironmentVariable("NEUTRINO_REMOTE_QML", QML_FILE);

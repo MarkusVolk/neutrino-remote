@@ -56,14 +56,15 @@ ApplicationWindow {
         statusError = !!error
     }
 
-    function get(path, callback) {
+    function get(path, callback, quiet) {
         var xhr = new XMLHttpRequest()
         var url = /^https?:\/\//.test(path) ? path : base + path
         xhr.onreadystatechange = function() {
             if (xhr.readyState !== XMLHttpRequest.DONE)
                 return
             if (xhr.status !== 200) {
-                showStatus(host + ": " + (xhr.status ? "HTTP " + xhr.status : "not reachable"), true)
+                if (!quiet)
+                    showStatus(host + ": " + (xhr.status ? "HTTP " + xhr.status : "not reachable"), true)
                 callback(null)
                 return
             }
@@ -169,19 +170,60 @@ ApplicationWindow {
         saveHost(h)
         showStatus("Connecting to " + h + " ...")
         get("Y_Tools_Rcsim.yhtm", function(html) {
-            if (html === null)
+            if (html === null) {
+                showCached()
                 return
+            }
             var parsed = parseRemote(html)
             if (!parsed) {
                 showStatus(host + ": no remote control in the web interface", true)
                 return
             }
-            areas = parsed.areas
-            picture.source = parsed.image
-            if (sideBar.visible)
-                loadBouquets()
+            fetchPicture(parsed)
         })
     }
+
+    function fetchPicture(parsed) {
+        var xhr = new XMLHttpRequest()
+        xhr.responseType = "arraybuffer"
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState !== XMLHttpRequest.DONE)
+                return
+            if (xhr.status !== 200) {
+                showStatus(host + ": " + (xhr.status ? "HTTP " + xhr.status : "not reachable"), true)
+                showCached()
+                return
+            }
+            var dir = native.cacheDir(host)
+            native.write(dir + "/remote.img", xhr.response)
+            native.write(dir + "/remote.json", JSON.stringify(parsed.areas))
+            areas = parsed.areas
+            connected = true
+            picture.source = ""
+            picture.source = "file://" + dir + "/remote.img"
+            if (sideBar.visible)
+                loadBouquets()
+        }
+        xhr.timeout = 5000
+        xhr.open("GET", parsed.image)
+        xhr.send()
+    }
+
+    function showCached() {
+        var dir = native.cacheDir(host)
+        if (!native.exists(dir + "/remote.img") || !native.exists(dir + "/remote.json"))
+            return
+        try {
+            areas = JSON.parse(native.readText(dir + "/remote.json"))
+        } catch (e) {
+            return
+        }
+        connected = false
+        picture.source = ""
+        picture.source = "file://" + dir + "/remote.img"
+    }
+
+    property bool connected: false
 
     function sendKey(key) {
         for (var i = 0; i < areas.length; i++) {
@@ -193,8 +235,10 @@ ApplicationWindow {
         }
         if (key === "KEY_POWER") {
             get("control/standby", function(state) {
-                if (state === null)
+                if (state === null) {
+                    startLocal()
                     return
+                }
                 if (state.trim() === "off")
                     standbyDialog.open()
                 else
@@ -203,6 +247,51 @@ ApplicationWindow {
             return
         }
         sendRaw(key)
+    }
+
+    function isLocal(h) {
+        return /^(localhost|127(\.\d+){3}|\[::1\])$/i.test(h.trim().replace(/\/+$/, ""))
+    }
+
+    function localStartCommand() {
+        if (!native.available("neutrino-desktop"))
+            return null
+        if (native.available("systemd-run"))
+            return ["systemd-run", "--user", "--quiet", "--collect", "neutrino-desktop"]
+        if (native.available("setsid"))
+            return ["setsid", "-f", "neutrino-desktop"]
+        return ["neutrino-desktop"]
+    }
+
+    function startLocal() {
+        var command = isLocal(host) ? localStartCommand() : null
+        if (!command)
+            return
+        if (!native.start(command[0], command.slice(1))) {
+            showStatus("neutrino-desktop could not be started", true)
+            return
+        }
+        showStatus("Starting Neutrino ...")
+        retries = 15
+        retryTimer.start()
+    }
+
+    property int retries: 0
+
+    Timer {
+        id: retryTimer
+        interval: 2000
+        onTriggered: {
+            root.retries -= 1
+            root.get("control/standby", function(state) {
+                if (state !== null)
+                    root.connectTo(root.host)
+                else if (root.retries > 0)
+                    retryTimer.start()
+                else
+                    root.showStatus("Neutrino did not come up", true)
+            }, true)
+        }
     }
 
     function sendRaw(key) {
@@ -396,11 +485,15 @@ ApplicationWindow {
                     fillMode: Image.PreserveAspectFit
                     smooth: true
                     mipmap: true
+                    cache: false
                     onStatusChanged: {
                         if (status === Image.Ready) {
                             root.aspect = sourceSize.width / sourceSize.height
                             root.fitToScreen()
-                            root.showStatus("Connected to " + root.host)
+                            if (root.connected)
+                                root.showStatus("Connected to " + root.host)
+                            else
+                                root.showStatus(root.host + ": not reachable, last remote shown", true)
                         } else if (status === Image.Error) {
                             root.showStatus("Remote control picture not loaded", true)
                         }

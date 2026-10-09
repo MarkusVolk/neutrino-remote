@@ -23,7 +23,8 @@ if get_option('qt').allowed()
     qt_dep = dependency('qt6', modules: ['Core', 'Gui', 'Qml', 'Quick'], required: get_option('qt'))
     if qt_dep.found()
       qml_file = pkgdatadir / 'neutrino-remote.qml'
-      executable('neutrino-remote-qt', 'qt/main.cpp',
+      moc_files = import('qt6').compile_moc(headers: 'qt/native.h', dependencies: qt_dep)
+      executable('neutrino-remote-qt', 'qt/main.cpp', moc_files,
         dependencies: qt_dep,
         cpp_args: ['-DAPP_ID="' + app_id + '"', '-DQML_FILE="' + qml_file + '"'],
         override_options: ['cpp_std=c++17'],

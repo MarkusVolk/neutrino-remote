@@ -231,7 +231,7 @@ class Window(Gtk.ApplicationWindow):
             width += side + 6
         self.set_default_size(width, view_h + header)
 
-    def get(self, path, callback, raw=False):
+    def get(self, path, callback, raw=False, quiet=False):
         msg = Soup.Message.new("GET", urllib.parse.urljoin(self.base, path))
         if msg is None:
             self.show_status("Invalid address", True)
@@ -243,7 +243,8 @@ class Window(Gtk.ApplicationWindow):
                 if msg.get_status() != 200:
                     raise GLib.Error(f"HTTP {msg.get_status()}")
             except GLib.Error as err:
-                self.show_status(f"{self.host}: {err.message}", True)
+                if not quiet:
+                    self.show_status(f"{self.host}: {err.message}", True)
                 callback(None)
                 return
             callback(data if raw else data.decode("utf-8", "replace"))
@@ -265,6 +266,7 @@ class Window(Gtk.ApplicationWindow):
 
     def on_page(self, html):
         if html is None:
+            self.show_cached()
             return
         parsed = remote.parse_remote(html, self.base)
         if not parsed:
@@ -273,21 +275,33 @@ class Window(Gtk.ApplicationWindow):
 
         def on_image(data):
             if data is None:
+                self.show_cached()
                 return
-            try:
-                texture = Gdk.Texture.new_from_bytes(GLib.Bytes.new(data))
-            except GLib.Error as err:
-                self.show_status(f"Remote control picture: {err.message}", True)
+            if not self.show_remote(data, parsed["areas"]):
                 return
-            self.view.set_remote(texture, parsed["areas"])
-            self.aspect = texture.get_width() / texture.get_height()
-            self.fit_to_monitor()
+            remote.save_cache(self.host, parsed["areas"], data)
             self.show_status(f"Connected to {self.host}")
-            self.set_focus(self.view)
             if self.side.get_visible():
                 self.load_bouquets()
 
         self.get(parsed["image"], on_image, raw=True)
+
+    def show_remote(self, data, areas):
+        try:
+            texture = Gdk.Texture.new_from_bytes(GLib.Bytes.new(data))
+        except GLib.Error as err:
+            self.show_status(f"Remote control picture: {err.message}", True)
+            return False
+        self.view.set_remote(texture, areas)
+        self.aspect = texture.get_width() / texture.get_height()
+        self.fit_to_monitor()
+        self.set_focus(self.view)
+        return True
+
+    def show_cached(self):
+        cached = remote.load_cache(self.host)
+        if cached and self.show_remote(cached[1], cached[0]):
+            self.show_status(f"{self.host}: not reachable, last remote shown", True)
 
     def send_key(self, key):
         if key == "KEY_POWER":
@@ -297,6 +311,7 @@ class Window(Gtk.ApplicationWindow):
 
     def confirm_power(self, state):
         if state is None:
+            self.start_local()
             return
         if state.strip() != "off":
             self.get("control/rcem?KEY_POWER", lambda r: r is not None and self.show_status("POWER sent"))
@@ -312,6 +327,33 @@ class Window(Gtk.ApplicationWindow):
                 pass
 
         dialog.choose(self, None, answered)
+
+    def start_local(self):
+        command = remote.local_start_command() if remote.is_local(self.host) else None
+        if not command:
+            return
+        try:
+            Gio.Subprocess.new(command, Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE)
+        except GLib.Error as err:
+            self.show_status(f"{remote.LOCAL_PROGRAM}: {err.message}", True)
+            return
+        self.show_status("Starting Neutrino ...")
+        self.retries = 15
+        GLib.timeout_add_seconds(2, self.retry_connect)
+
+    def retry_connect(self):
+        self.retries -= 1
+
+        def done(state):
+            if state is not None:
+                self.connect_to(self.host)
+            elif self.retries > 0:
+                GLib.timeout_add_seconds(2, self.retry_connect)
+            else:
+                self.show_status("Neutrino did not come up", True)
+
+        self.get("control/standby", done, quiet=True)
+        return False
 
     def on_key(self, _ctl, keyval, _code, state):
         if self.entry.has_focus() or state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK):

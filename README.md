@@ -19,6 +19,11 @@ other side for a window anchored at the left edge; the choice is kept in
 There are two frontends: GTK 4 (Python) and Qt 6 (QML). The launcher picks the Qt one under
 KDE and the GTK one elsewhere, or the one that is installed.
 
+The remote of a box is kept under `~/.cache/neutrino-remote/`, so it is shown even while the
+box does not answer. The power key puts the box into standby or wakes it. When the address is
+localhost and no Neutrino answers there, the key starts `neutrino-desktop` instead and connects
+once it is up.
+
 Keyboard: arrows, Enter (OK), Esc/Backspace (Exit), digits, `m` menu, `i` info, `e` EPG,
 `+`/`-` volume, Page Up/Down, F1-F4 colour keys, `t` text, `a` audio, `h` help, `r` radio, `v` TV.
 
