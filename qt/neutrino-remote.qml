@@ -425,12 +425,54 @@ ApplicationWindow {
         if (next && next.description)
             tip.push("Next: " + next.startTime + "  " + next.description)
         var percent = now ? parseInt(now.percentage) : -1
+        var left = now ? parseInt(now.timeTotal) - parseInt(now.timeElapsed) : NaN
         return {
             number: c.number, cid: c.id, name: c.name,
             epg: now && now.description ? now.startTime + "  " + now.description : "",
+            title: now && now.description ? now.description : "",
+            end: now && now.description && !isNaN(left) ? Math.floor(Date.now() / 1000) + left * 60 : 0,
             percent: isNaN(percent) ? -1 : Math.max(0, Math.min(100, percent)),
             tip: tip.join("\n")
         }
+    }
+
+    /* a record timer for the programme that is on, from now to its end; the box adds
+     * its own lead and follow-up time */
+    function record(cid, end, title) {
+        var now = Math.floor(Date.now() / 1000)
+        if (end <= now)
+            return
+        get("control/timer?action=new&type=5&channel_id=" + cid + "&alarm=" + now + "&stop=" + end + "&rs=1",
+            function(r) {
+                if (r !== null)
+                    showStatus("Recording: " + title)
+            })
+    }
+
+    function stream(cid, name) {
+        get("control/streamurl?id=" + cid, function(url) {
+            url = (url || "").trim()
+            if (!url) {
+                showStatus(name + ": no stream address", true)
+                return
+            }
+            if (url.charAt(0) === "/")
+                url = base + url.substring(1)
+            var players = ["mpv", "celluloid", "vlc"]
+            for (var i = 0; i < players.length; i++) {
+                if (native.available(players[i])) {
+                    if (native.start(players[i], [url]))
+                        showStatus("Streaming " + name)
+                    else
+                        showStatus(players[i] + " could not be started", true)
+                    return
+                }
+            }
+            if (Qt.openUrlExternally(url))
+                showStatus("Streaming " + name)
+            else
+                showStatus("No player for " + name, true)
+        })
     }
 
     function zapTo(cid) {
@@ -554,77 +596,107 @@ ApplicationWindow {
                 onTriggered: root.loadChannels(bouquetBox.currentIndex)
             }
 
-            ListView {
-                id: channelList
+            SplitView {
+                id: split
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                clip: true
-                model: ListModel { id: channelModel }
-                ScrollBar.vertical: ScrollBar {}
-                delegate: ItemDelegate {
-                    width: channelList.width
-                    onClicked: root.zapTo(model.cid)
-                    background: Rectangle { color: parent.hovered ? root.raised : "transparent" }
-                    ToolTip.visible: hovered && model.tip !== ""
-                    ToolTip.text: model.tip
-                    ToolTip.delay: 500
-                    contentItem: RowLayout {
-                        spacing: 8
-                        Text { text: model.number; color: root.dim; font.family: "monospace"; Layout.preferredWidth: 36; Layout.alignment: Qt.AlignTop; horizontalAlignment: Text.AlignRight }
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 1
-                            Text {
-                                text: model.name
+                orientation: Qt.Vertical
+                handle: Rectangle {
+                    implicitHeight: 6
+                    color: SplitHandle.hovered || SplitHandle.pressed ? root.line : "transparent"
+                }
+
+                ListView {
+                    id: channelList
+                    SplitView.fillHeight: true
+                    SplitView.minimumHeight: 80
+                    clip: true
+                    model: ListModel { id: channelModel }
+                    ScrollBar.vertical: ScrollBar {}
+                    delegate: ItemDelegate {
+                        width: channelList.width
+                        onClicked: root.zapTo(model.cid)
+                        background: Rectangle { color: parent.hovered ? root.raised : "transparent" }
+                        ToolTip.visible: hovered && model.tip !== ""
+                        ToolTip.text: model.tip
+                        ToolTip.delay: 500
+                        contentItem: RowLayout {
+                            spacing: 8
+                            Text { text: model.number; color: root.dim; font.family: "monospace"; Layout.preferredWidth: 36; Layout.alignment: Qt.AlignTop; horizontalAlignment: Text.AlignRight }
+                            ColumnLayout {
                                 Layout.fillWidth: true
-                                elide: Text.ElideRight
-                                color: model.cid === root.currentChannel ? root.accent : root.fg
-                                font.bold: model.cid === root.currentChannel
-                            }
-                            RowLayout {
-                                visible: model.epg !== ""
-                                Layout.fillWidth: true
-                                spacing: 8
-                                Text { text: model.epg; Layout.fillWidth: true; elide: Text.ElideRight; color: root.dim; font.pointSize: Qt.application.font.pointSize * 0.85 }
-                                Rectangle {
-                                    visible: model.percent >= 0
-                                    Layout.preferredWidth: 48
-                                    Layout.preferredHeight: 3
-                                    color: root.line
-                                    Rectangle { width: parent.width * model.percent / 100; height: parent.height; color: root.accent }
+                                spacing: 1
+                                Text {
+                                    text: model.name
+                                    Layout.fillWidth: true
+                                    elide: Text.ElideRight
+                                    color: model.cid === root.currentChannel ? root.accent : root.fg
+                                    font.bold: model.cid === root.currentChannel
                                 }
+                                RowLayout {
+                                    visible: model.epg !== ""
+                                    Layout.fillWidth: true
+                                    spacing: 8
+                                    Text { text: model.epg; Layout.fillWidth: true; elide: Text.ElideRight; color: root.dim; font.pointSize: Qt.application.font.pointSize * 0.85 }
+                                    Rectangle {
+                                        visible: model.percent >= 0
+                                        Layout.preferredWidth: 48
+                                        Layout.preferredHeight: 3
+                                        color: root.line
+                                        Rectangle { width: parent.width * model.percent / 100; height: parent.height; color: root.accent }
+                                    }
+                                }
+                            }
+                            ToolButton {
+                                id: recordButton
+                                visible: model.end > 0
+                                Layout.alignment: Qt.AlignVCenter
+                                ToolTip.visible: hovered
+                                ToolTip.text: "Record the programme that is on"
+                                contentItem: IconImage { name: "media-record-symbolic"; color: root.fg; sourceSize: Qt.size(16, 16); fillMode: Image.Pad }
+                                background: Rectangle { color: recordButton.hovered ? root.line : "transparent"; radius: 4 }
+                                onClicked: root.record(model.cid, model.end, model.title)
+                            }
+                            ToolButton {
+                                id: streamButton
+                                visible: !root.isLocal(root.host)
+                                Layout.alignment: Qt.AlignVCenter
+                                ToolTip.visible: hovered
+                                ToolTip.text: "Watch on this computer"
+                                contentItem: IconImage { name: "media-playback-start-symbolic"; color: root.fg; sourceSize: Qt.size(16, 16); fillMode: Image.Pad }
+                                background: Rectangle { color: streamButton.hovered ? root.line : "transparent"; radius: 4 }
+                                onClicked: root.stream(model.cid, model.name)
                             }
                         }
                     }
                 }
-            }
 
-            Item {
-                Layout.fillWidth: true
-                Layout.preferredHeight: width * 9 / 16
-                ToolTip.visible: osdHover.hovered
-                ToolTip.text: "Screen of the box"
-                HoverHandler { id: osdHover }
+                Item {
+                    SplitView.preferredHeight: Math.min(split.width * 9 / 16, split.height * 0.7)
+                    ToolTip.visible: osdHover.hovered
+                    ToolTip.text: "Screen of the box"
+                    HoverHandler { id: osdHover }
 
-                Image {
-                    id: osdA
-                    anchors.fill: parent
-                    fillMode: Image.PreserveAspectFit
-                    smooth: true
-                    mipmap: true
-                    cache: false
-                    visible: root.osdShown === 0
-                    onStatusChanged: root.osdLoaded(0, osdA)
-                }
-                Image {
-                    id: osdB
-                    anchors.fill: parent
-                    fillMode: Image.PreserveAspectFit
-                    smooth: true
-                    mipmap: true
-                    cache: false
-                    visible: root.osdShown === 1
-                    onStatusChanged: root.osdLoaded(1, osdB)
+                    Image {
+                        id: osdA
+                        anchors.fill: parent
+                        fillMode: Image.PreserveAspectFit
+                        smooth: true
+                        mipmap: true
+                        cache: false
+                        visible: root.osdShown === 0
+                        onStatusChanged: root.osdLoaded(0, osdA)
+                    }
+                    Image {
+                        id: osdB
+                        anchors.fill: parent
+                        fillMode: Image.PreserveAspectFit
+                        smooth: true
+                        mipmap: true
+                        cache: false
+                        visible: root.osdShown === 1
+                        onStatusChanged: root.osdLoaded(1, osdB)
+                    }
                 }
             }
         }

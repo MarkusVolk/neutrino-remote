@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import time
 import urllib.parse
 
 DEFAULT_HOST = "192.168.0.1"
@@ -178,7 +179,11 @@ def _event(epg):
         percent = max(0, min(100, int(epg.get("percentage", -1))))
     except ValueError:
         percent = -1
-    return {"start": epg.get("startTime", ""), "title": epg["description"], "percent": percent}
+    try:
+        end = int(time.time()) + (int(epg["timeTotal"]) - int(epg["timeElapsed"])) * 60
+    except (KeyError, ValueError):
+        end = 0
+    return {"start": epg.get("startTime", ""), "title": epg["description"], "percent": percent, "end": end}
 
 
 def parse_channels(text):
@@ -188,6 +193,31 @@ def parse_channels(text):
     return [{"number": c["number"], "id": c["id"], "name": c["name"],
              "now": _event(c.get("firstEPG")), "next": _event(c.get("secondEPG"))}
             for c in data.get("channels", [])]
+
+
+def record_path(channel):
+    """A record timer for the programme that is on, from now to its end; the box adds
+    its own lead and follow-up time."""
+    now = channel["now"]
+    if not now or now["end"] <= time.time():
+        return None
+    query = urllib.parse.urlencode({"action": "new", "type": 5, "channel_id": channel["id"],
+                                    "alarm": int(time.time()), "stop": now["end"], "rs": 1})
+    return "control/timer?" + query
+
+
+def stream_path(channel):
+    return "control/streamurl?id=" + channel["id"]
+
+
+PLAYERS = ("mpv", "celluloid", "vlc")
+
+
+def player_command(url):
+    for player in PLAYERS:
+        if shutil.which(player):
+            return [player, url]
+    return None
 
 
 def epg_tooltip(channel):

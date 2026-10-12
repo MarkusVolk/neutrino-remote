@@ -33,6 +33,8 @@ entry { background-color: #272c36; color: #d7dce5; }
 progressbar.epg trough, progressbar.epg progress { min-height: 3px; }
 progressbar.epg trough { background-color: #333a47; }
 progressbar.epg progress { background-color: #67aee8; }
+paned > separator { background: #333a47; min-height: 1px; opacity: 0; }
+paned > separator:hover { opacity: 1; }
 """
 
 SNI_XML = """
@@ -283,12 +285,16 @@ class Window(Gtk.ApplicationWindow):
         scroll.set_child(self.channel_list)
         self.side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, width_request=260)
         self.side.append(self.bouquets)
-        self.side.append(scroll)
         self.osd = Gtk.Picture(content_fit=Gtk.ContentFit.CONTAIN, can_shrink=True)
         self.osd.set_tooltip_text("Screen of the box")
-        osd_frame = Gtk.AspectFrame(ratio=16 / 9, obey_child=False, vexpand=True)
+        osd_frame = Gtk.AspectFrame(ratio=16 / 9, obey_child=False)
         osd_frame.set_child(self.osd)
-        self.side.append(osd_frame)
+        self.split = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL, vexpand=True,
+                               shrink_start_child=False, shrink_end_child=True)
+        self.split.set_start_child(scroll)
+        self.split.set_end_child(osd_frame)
+        self.split_placed = False
+        self.side.append(self.split)
         self.side.set_visible(False)
         self.osd_timers = []
         self.osd_busy = False
@@ -343,6 +349,10 @@ class Window(Gtk.ApplicationWindow):
             side = max(320, int(area.width * 0.25))
             self.side.set_size_request(side, -1)
             width += side + 6
+            if not self.split_placed:
+                list_h = view_h - 48 - side * 9 // 16
+                self.split.set_position(max(list_h, view_h * 3 // 10))
+                self.split_placed = True
         self.set_default_size(width, view_h + header)
 
     def get(self, path, callback, raw=False, quiet=False):
@@ -599,6 +609,9 @@ class Window(Gtk.ApplicationWindow):
                 row.epg_bar.set_visible(now["percent"] >= 0)
                 row.epg_bar.set_fraction(max(now["percent"], 0) / 100)
             row.set_tooltip_text(remote.epg_tooltip(channel))
+            row.channel = channel
+            row.record.set_visible(remote.record_path(channel) is not None)
+            row.stream.set_visible(not remote.is_local(self.host))
 
     def channel_row(self, channel):
         row = Gtk.ListBoxRow()
@@ -617,10 +630,48 @@ class Window(Gtk.ApplicationWindow):
         row.epg_box.append(row.epg_bar)
         text.append(row.name_label)
         text.append(row.epg_box)
+        row.record = Gtk.Button(icon_name="media-record-symbolic", valign=Gtk.Align.CENTER)
+        row.record.add_css_class("flat")
+        row.record.set_tooltip_text("Record the programme that is on")
+        row.record.connect("clicked", lambda *_: self.record(row.channel))
+        row.stream = Gtk.Button(icon_name="media-playback-start-symbolic", valign=Gtk.Align.CENTER)
+        row.stream.add_css_class("flat")
+        row.stream.set_tooltip_text("Watch on this computer")
+        row.stream.connect("clicked", lambda *_: self.stream(row.channel))
         box.append(num)
         box.append(text)
+        box.append(row.record)
+        box.append(row.stream)
         row.set_child(box)
         return row
+
+    def record(self, channel):
+        path = remote.record_path(channel)
+        if not path:
+            return
+        title = channel["now"]["title"]
+        self.get(path, lambda r: r is not None and self.show_status(f"Recording: {title}"))
+
+    def stream(self, channel):
+        def done(url):
+            url = (url or "").strip()
+            if not url:
+                self.show_status(f"{channel['name']}: no stream address", True)
+                return
+            if url.startswith("/"):
+                url = urllib.parse.urljoin(self.base, url)
+            command = remote.player_command(url)
+            try:
+                if command:
+                    Gio.Subprocess.new(command, Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE)
+                else:
+                    Gio.AppInfo.launch_default_for_uri(url, None)
+            except GLib.Error as err:
+                self.show_status(f"Player: {err.message}", True)
+                return
+            self.show_status(f"Streaming {channel['name']}")
+
+        self.get(remote.stream_path(channel), done)
 
     def refresh_epg(self):
         if not self.side.get_visible():
