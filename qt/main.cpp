@@ -18,6 +18,7 @@ int main(int argc, char *argv[])
 
 	QQmlApplicationEngine engine;
 	Native native;
+	native.setEngine(&engine);
 	engine.rootContext()->setContextProperty("native", &native);
 	QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app,
 			 [] { QCoreApplication::exit(1); }, Qt::QueuedConnection);

@@ -28,12 +28,23 @@ ApplicationWindow {
     property var bouquetNumbers: []
     property string currentChannel: ""
     property real aspect: 188 / 762
+    property int canvasW: 0
+    property int canvasH: 0
     property bool osdBusy: false
     property bool osdAgain: false
     property int osdShown: 0
     property real lastKey: 0
-    readonly property string osdShot: "control/screenshot?name=neutrino-remote&osd=1&video=0&format=png"
-    readonly property string osdImage: "tmp/neutrino-remote.png"
+    /* the box speaks the REST API of /api/v1 (as ni-neutrino does), or only the old
+     * control API of nhttpd; which one is asked once on connecting */
+    property bool legacy: false
+    /* a session the box opened on signing in: its cookie lives in the engine's jar */
+    property string csrf: ""
+    property var waiting: []
+    readonly property string sessionCookie: "ni-web-session"
+    readonly property string osdShot: "api/v1/osd/screenshot?osd=true&video=false&format=png"
+    readonly property string legacyShot: "control/screenshot?name=neutrino-remote&osd=1&video=0&format=png"
+    readonly property string legacyImage: "tmp/neutrino-remote.png"
+    readonly property int epgWindow: 6 * 3600
 
     title: "Neutrino Remote"
     color: bg
@@ -64,12 +75,68 @@ ApplicationWindow {
     }
 
     function get(path, callback, quiet) {
+        request("GET", path, null, callback, quiet)
+    }
+
+    function post(path, body, callback, quiet) {
+        request("POST", path, body, callback, quiet)
+    }
+
+    /* a bearer token of the box's REST API, for a box that asks for one */
+    /* the token kept for this box, else one for every box */
+    function boxName() {
+        return host.trim().replace(/\/+$/, "").replace(/[^\w.-]/g, "_")
+    }
+
+    function tokenFile() {
+        return configFile.replace(/[^\/]*$/, "token-" + boxName())
+    }
+
+    function token() {
+        if (!configFile)
+            return ""
+        var files = [tokenFile(), configFile.replace(/[^\/]*$/, "token")]
+        for (var i = 0; i < files.length; i++) {
+            var t = native.exists(files[i]) ? native.readText(files[i]).trim() : ""
+            if (t)
+                return t
+        }
+        return ""
+    }
+
+    function tokenLines(t) {
+        return "ni-neutrino, /var/tuxbox/config/ni-web.conf:\napi_tokens=write:" + t
+            + "\nNeutrino, nhttpd.conf:\napi.tokens=write:" + t
+    }
+
+    function useToken() {
+        if (configFile)
+            native.writePrivate(tokenFile(), tokenField.text.trim() + "\n")
+        showStatus("Token kept for " + host)
+        finishSignIn(true)
+    }
+
+    function request(method, path, body, callback, quiet, retried) {
         var xhr = new XMLHttpRequest()
         var url = /^https?:\/\//.test(path) ? path : base + path
+        var t = token()
         xhr.onreadystatechange = function() {
             if (xhr.readyState !== XMLHttpRequest.DONE)
                 return
-            if (xhr.status !== 200) {
+            if (xhr.status === 403 && !legacy && !retried && path.indexOf("api/v1/") === 0) {
+                if (t)
+                    native.remove(tokenFile())
+                else if (csrf)
+                    clearSession()
+                signIn(function(ok) {
+                    if (ok)
+                        request(method, path, body, callback, quiet, true)
+                    else
+                        callback(null)
+                }, !!t)
+                return
+            }
+            if (Math.floor(xhr.status / 100) !== 2) {
                 if (!quiet)
                     showStatus(host + ": " + (xhr.status ? "HTTP " + xhr.status : "not reachable"), true)
                 callback(null)
@@ -78,8 +145,120 @@ ApplicationWindow {
             callback(xhr.responseText)
         }
         xhr.timeout = 5000
-        xhr.open("GET", url)
-        xhr.send()
+        xhr.open(method, url)
+        if (t)
+            xhr.setRequestHeader("Authorization", "Bearer " + t)
+        else if (csrf && method !== "GET")
+            xhr.setRequestHeader("X-CSRF-Token", csrf)
+        if (body !== null) {
+            xhr.setRequestHeader("Content-Type", "application/json")
+            xhr.send(JSON.stringify(body))
+        } else {
+            xhr.send()
+        }
+    }
+
+    /* every page of a list, handed on as one list; null when a page failed */
+    function getAll(pathOf, callback, quiet, items, cursor) {
+        items = items || []
+        get(pathOf(cursor), function(text) {
+            if (text === null) {
+                callback(null)
+                return
+            }
+            var data
+            try {
+                data = JSON.parse(text)
+            } catch (e) {
+                callback(null)
+                return
+            }
+            items = items.concat(data.items || [])
+            if (data.next_cursor)
+                getAll(pathOf, callback, quiet, items, data.next_cursor)
+            else
+                callback(items)
+        }, quiet)
+    }
+
+    function sessionFile() {
+        return configFile.replace(/[^\/]*$/, "session-" + host.trim().replace(/\/+$/, "").replace(/[^\w.-]/g, "_"))
+    }
+
+    function loadSession() {
+        csrf = ""
+        var file = sessionFile()
+        if (!configFile || !native.exists(file))
+            return
+        try {
+            var data = JSON.parse(native.readText(file))
+            native.setCookie(base, sessionCookie, data.cookie)
+            csrf = data.csrf || ""
+        } catch (e) {
+        }
+    }
+
+    function clearSession() {
+        csrf = ""
+        native.remove(sessionFile())
+    }
+
+    /* a box that wants a sign-in for this asks for a name and password; what it answers
+     * with is kept, the password is not. Requests that come in meanwhile wait for it. */
+    function signIn(then, tokenRefused) {
+        var w = waiting
+        w.push(then)
+        waiting = w
+        if (!loginDialog.visible) {
+            loginNote.text = tokenRefused ? "The box did not take the token." : "The box asks for a sign-in to be controlled."
+            loginNote.color = tokenRefused ? errorFg : dim
+            passField.text = ""
+            tokenField.text = ""
+            loginDialog.open()
+            passField.forceActiveFocus()
+        }
+    }
+
+    function finishSignIn(ok) {
+        var w = waiting
+        waiting = []
+        loginDialog.close()
+        for (var i = 0; i < w.length; i++)
+            w[i](ok)
+    }
+
+    function submitSignIn() {
+        signInButton.enabled = false
+        var xhr = new XMLHttpRequest()
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState !== XMLHttpRequest.DONE)
+                return
+            signInButton.enabled = true
+            if (xhr.status === 200) {
+                var answer = {}
+                try {
+                    answer = JSON.parse(xhr.responseText)
+                } catch (e) {
+                }
+                var cookie = native.cookie(base, sessionCookie)
+                if (cookie && answer.csrf) {
+                    csrf = answer.csrf
+                    if (configFile)
+                        native.writePrivate(sessionFile(), JSON.stringify({ cookie: cookie, csrf: csrf }))
+                    showStatus("Signed in to " + host)
+                    finishSignIn(true)
+                    return
+                }
+            }
+            loginNote.text = xhr.status === 401 ? "Name and password do not go together."
+                           : xhr.status === 429 ? "Too many wrong attempts, wait a moment."
+                           : "Sign-in failed" + (xhr.status ? " (HTTP " + xhr.status + ")" : "") + "."
+            loginNote.color = errorFg
+        }
+        xhr.timeout = 5000
+        xhr.open("POST", base + "api/v1/login")
+        xhr.setRequestHeader("Content-Type", "application/json")
+        xhr.send(JSON.stringify({ user: userField.text, password: passField.text }))
     }
 
     function saveHost(h) {
@@ -88,42 +267,6 @@ ApplicationWindow {
         var xhr = new XMLHttpRequest()
         xhr.open("PUT", "file://" + configFile)
         xhr.send(h + "\n")
-    }
-
-    function attrs(text) {
-        var re = /(\w+)\s*=\s*("([^"]*)"|'([^']*)')/g
-        var out = {}
-        var m
-        while ((m = re.exec(text)) !== null)
-            out[m[1].toLowerCase()] = m[3] !== undefined ? m[3] : m[4]
-        return out
-    }
-
-    function parseRemote(html) {
-        var img = /<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*\busemap\b/i.exec(html)
-        if (!img)
-            return null
-        var list = []
-        var re = /<area\b([^>]*)>/gi
-        var m
-        while ((m = re.exec(html)) !== null) {
-            var a = attrs(m[1])
-            var key = /rcsim\(\s*['"](KEY_\w+)['"]\s*\)/.exec(a.href || "")
-            var coords = (a.coords || "").split(",").filter(function(c) { return c.trim() !== "" })
-                                             .map(function(c) { return Math.round(parseFloat(c)) })
-            var shape = (a.shape || "rect").toLowerCase()
-            if (!key || coords.some(isNaN))
-                continue
-            if ((shape === "circle" && coords.length !== 3) || (shape !== "circle" && coords.length < 4))
-                continue
-            var name = key[1].substring(4).replace(/_/g, " ").toLowerCase()
-            list.push({ key: key[1], shape: shape, coords: coords,
-                        title: a.title || a.alt || name.charAt(0).toUpperCase() + name.slice(1) })
-        }
-        var src = img[1]
-        if (!/^https?:\/\//.test(src))
-            src = base + src.replace(/^\/+/, "")
-        return { image: src, areas: list }
     }
 
     function contains(area, x, y) {
@@ -157,11 +300,10 @@ ApplicationWindow {
     }
 
     function areaAt(x, y) {
-        if (picture.status !== Image.Ready)
+        if (keysView.s <= 0)
             return null
-        var s = picture.paintedWidth / picture.sourceSize.width
-        var px = (x - (picture.width - picture.paintedWidth) / 2) / s
-        var py = (y - (picture.height - picture.paintedHeight) / 2) / s
+        var px = (x - keysView.ox) / keysView.s
+        var py = (y - keysView.oy) / keysView.s
         for (var i = 0; i < areas.length; i++)
             if (contains(areas[i], px, py))
                 return areas[i]
@@ -175,62 +317,58 @@ ApplicationWindow {
         host = h
         base = baseUrl(h)
         saveHost(h)
+        loadSession()
         showStatus("Connecting to " + h + " ...")
-        get("Y_Tools_Rcsim.yhtm", function(html) {
-            if (html === null) {
-                showCached()
-                return
-            }
-            var parsed = parseRemote(html)
-            if (!parsed) {
-                showStatus(host + ": no remote control in the web interface", true)
-                return
-            }
-            fetchPicture(parsed)
-        })
-    }
-
-    function fetchPicture(parsed) {
-        var xhr = new XMLHttpRequest()
-        xhr.responseType = "arraybuffer"
-        xhr.onreadystatechange = function() {
-            if (xhr.readyState !== XMLHttpRequest.DONE)
-                return
-            if (xhr.status !== 200) {
-                showStatus(host + ": " + (xhr.status ? "HTTP " + xhr.status : "not reachable"), true)
-                showCached()
-                return
-            }
-            var dir = native.cacheDir(host)
-            native.write(dir + "/remote.img", xhr.response)
-            native.write(dir + "/remote.json", JSON.stringify(parsed.areas))
-            areas = parsed.areas
-            connected = true
-            picture.source = ""
-            picture.source = "file://" + dir + "/remote.img"
-            if (sideBar.visible)
-                loadBouquets()
-        }
-        xhr.timeout = 5000
-        xhr.open("GET", parsed.image)
-        xhr.send()
-    }
-
-    function showCached() {
-        var dir = native.cacheDir(host)
-        if (!native.exists(dir + "/remote.img") || !native.exists(dir + "/remote.json"))
-            return
-        try {
-            areas = JSON.parse(native.readText(dir + "/remote.json"))
-        } catch (e) {
-            return
-        }
-        connected = false
-        picture.source = ""
-        picture.source = "file://" + dir + "/remote.img"
+        showDrawn()
     }
 
     property bool connected: false
+
+    /* the drawn remote control, installed next to this file or in data/ of the source tree */
+    function loadLayout() {
+        var names = ["remote-layout.json", "../data/remote-layout.json"]
+        for (var i = 0; i < names.length; i++) {
+            var path = Qt.resolvedUrl(names[i]).toString().replace(/^file:\/\//, "")
+            if (!native.exists(path))
+                continue
+            try {
+                return JSON.parse(native.readText(path))
+            } catch (e) {
+            }
+        }
+        return null
+    }
+
+    /* the drawn remote control; whether the box is there, and which API it speaks, is asked of it */
+    function showDrawn() {
+        var layout = loadLayout()
+        if (!layout) {
+            showStatus("remote-layout.json not found", true)
+            return
+        }
+        areas = layout.keys
+        canvasW = layout.width
+        canvasH = layout.height
+        aspect = canvasW / canvasH
+        fitToScreen()
+        remoteArea.forceActiveFocus()
+        var answered = function(old) {
+            legacy = old
+            connected = true
+            showStatus("Connected to " + host + (old ? " (control API)" : ""))
+            if (sideBar.visible)
+                loadBouquets()
+        }
+        get("api/v1/system/info", function(text) {
+            if (text !== null)
+                answered(false)
+            else
+                get("control/info", function(info) {
+                    if (info !== null)
+                        answered(true)
+                })
+        }, true)
+    }
 
     function sendKey(key) {
         for (var i = 0; i < areas.length; i++) {
@@ -241,19 +379,30 @@ ApplicationWindow {
             }
         }
         if (key === "KEY_POWER") {
-            get("control/standby", function(state) {
+            get(standbyPath(), function(state) {
                 if (state === null) {
                     startLocal()
                     return
                 }
-                if (state.trim() === "off")
-                    standbyDialog.open()
-                else
+                var on
+                try {
+                    on = legacy ? state.trim() === "on" : JSON.parse(state).on
+                } catch (e) {
+                    showStatus("Standby state not readable", true)
+                    return
+                }
+                if (on)
                     sendRaw("KEY_POWER")
+                else
+                    standbyDialog.open()
             })
             return
         }
         sendRaw(key)
+    }
+
+    function standbyPath() {
+        return legacy ? "control/standby" : "api/v1/system/standby"
     }
 
     function isLocal(h) {
@@ -290,7 +439,7 @@ ApplicationWindow {
         interval: 2000
         onTriggered: {
             root.retries -= 1
-            root.get("control/standby", function(state) {
+            root.get(root.standbyPath(), function(state) {
                 if (state !== null)
                     root.connectTo(root.host)
                 else if (root.retries > 0)
@@ -302,12 +451,16 @@ ApplicationWindow {
     }
 
     function sendRaw(key) {
-        get("control/rcem?" + key, function(r) {
+        var sent = function(r) {
             if (r !== null) {
                 showStatus(key.substring(4) + " sent")
                 followOsd()
             }
-        })
+        }
+        if (legacy)
+            get("control/rcem?" + key, sent)
+        else
+            post("api/v1/osd/remote/key", { name: key }, sent)
     }
 
     /* the screen follows the last key of a row: a shot when the keys have stopped
@@ -326,13 +479,17 @@ ApplicationWindow {
             return
         }
         osdBusy = true
-        get(osdShot, function(r) {
+        var back = osdShown === 0 ? osdB : osdA
+        if (!legacy) {
+            back.source = base + osdShot + "&at=" + (Date.now() % 4294967296)
+            return
+        }
+        get(legacyShot, function(r) {
             if (r === null) {
                 osdDone()
                 return
             }
-            var back = osdShown === 0 ? osdB : osdA
-            back.source = base + osdImage + "?" + Date.now()
+            back.source = base + legacyImage + "?" + Date.now()
         }, true)
     }
 
@@ -366,17 +523,20 @@ ApplicationWindow {
     }
 
     function loadBouquets() {
-        get("control/getbouquets?format=json", function(text) {
+        get(legacy ? "control/getbouquets?format=json" : "api/v1/bouquets", function(text) {
             if (text === null)
                 return
             var list
             try {
-                list = JSON.parse(text).data.bouquets || []
+                if (legacy)
+                    list = (JSON.parse(text).data.bouquets || []).map(function(b) { return { id: b.number, name: b.name } })
+                else
+                    list = (JSON.parse(text).items || []).filter(function(b) { return !b.hidden && b.tv_count > 0 })
             } catch (e) {
                 showStatus("Bouquet list not readable", true)
                 return
             }
-            bouquetNumbers = list.map(function(b) { return b.number })
+            bouquetNumbers = list.map(function(b) { return b.id })
             bouquetBox.model = list.map(function(b) { return b.name })
             if (list.length > 0) {
                 bouquetBox.currentIndex = 0
@@ -388,7 +548,37 @@ ApplicationWindow {
     function loadChannels(index) {
         if (index < 0 || index >= bouquetNumbers.length)
             return
-        get("control/getbouquet?bouquet=" + bouquetNumbers[index] + "&format=json&epg=true&epginfo=false", function(text) {
+        var number = bouquetNumbers[index]
+        if (legacy) {
+            loadLegacyChannels(number)
+            return
+        }
+        getAll(function(cursor) {
+            return "api/v1/channels?bouquet=" + number + "&limit=500" + (cursor ? "&cursor=" + cursor : "")
+        }, function(list) {
+            if (list === null)
+                return
+            var now = Math.floor(Date.now() / 1000)
+            getAll(function(cursor) {
+                return "api/v1/epg/grid?bouquet=" + number + "&from=" + now + "&to=" + (now + epgWindow)
+                    + "&limit=100" + (cursor ? "&cursor=" + cursor : "")
+            }, function(grid) {
+                var events = {}
+                ;(grid || []).forEach(function(row) { events[row.channel_id] = row.events || [] })
+                get("api/v1/channels/current", function(current) {
+                    try {
+                        currentChannel = current ? JSON.parse(current).id || "" : ""
+                    } catch (e) {
+                        currentChannel = ""
+                    }
+                    fillChannels(list.map(function(c) { return channelItem(c, events[c.id] || []) }))
+                }, true)
+            }, true)
+        })
+    }
+
+    function loadLegacyChannels(number) {
+        get("control/getbouquet?bouquet=" + number + "&format=json&epg=true&epginfo=false", function(text) {
             if (text === null)
                 return
             var list
@@ -400,24 +590,27 @@ ApplicationWindow {
             }
             get("control/zapto", function(current) {
                 currentChannel = (current || "").trim()
-                var same = channelModel.count === list.length
-                for (var j = 0; same && j < list.length; j++)
-                    same = channelModel.get(j).cid === list[j].id
-                if (!same)
-                    channelModel.clear()
-                for (var i = 0; i < list.length; i++) {
-                    var item = channelItem(list[i])
-                    if (same)
-                        channelModel.set(i, item)
-                    else
-                        channelModel.append(item)
-                }
-            })
+                fillChannels(list.map(legacyItem))
+            }, true)
         })
     }
 
-    /* a row of the channel list with the programme that is on and the next one */
-    function channelItem(c) {
+    function fillChannels(items) {
+        var same = channelModel.count === items.length
+        for (var j = 0; same && j < items.length; j++)
+            same = channelModel.get(j).cid === items[j].cid
+        if (!same)
+            channelModel.clear()
+        for (var i = 0; i < items.length; i++) {
+            if (same)
+                channelModel.set(i, items[i])
+            else
+                channelModel.append(items[i])
+        }
+    }
+
+    /* a row of the channel list from getbouquet of the control API */
+    function legacyItem(c) {
         var now = c.firstEPG, next = c.secondEPG
         var tip = []
         if (now && now.description)
@@ -427,31 +620,76 @@ ApplicationWindow {
         var percent = now ? parseInt(now.percentage) : -1
         var left = now ? parseInt(now.timeTotal) - parseInt(now.timeElapsed) : NaN
         return {
-            number: c.number, cid: c.id, name: c.name,
+            number: String(c.number), cid: c.id, name: c.name,
             epg: now && now.description ? now.startTime + "  " + now.description : "",
             title: now && now.description ? now.description : "",
             end: now && now.description && !isNaN(left) ? Math.floor(Date.now() / 1000) + left * 60 : 0,
+            epgId: "",
+            begin: 0,
             percent: isNaN(percent) ? -1 : Math.max(0, Math.min(100, percent)),
+            tip: tip.join("\n")
+        }
+    }
+
+    function clock(t) {
+        var d = new Date(t * 1000)
+        return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2)
+    }
+
+    /* a row of the channel list with the programme that is on and the next one */
+    function channelItem(c, events) {
+        var t = Math.floor(Date.now() / 1000)
+        var evs = events.filter(function(e) { return e.start + e.duration > t })
+                        .sort(function(a, b) { return a.start - b.start })
+        var now = evs.filter(function(e) { return e.start <= t })[0]
+        var next = evs.filter(function(e) { return e.start > t })[0]
+        var tip = []
+        if (now)
+            tip.push("Now: " + clock(now.start) + "  " + now.title)
+        if (next)
+            tip.push("Next: " + clock(next.start) + "  " + next.title)
+        var percent = now && now.duration > 0 ? Math.floor((t - now.start) * 100 / now.duration) : -1
+        return {
+            number: String(c.number), cid: c.id, name: c.name,
+            epg: now ? clock(now.start) + "  " + now.title : "",
+            title: now ? now.title : "",
+            end: now ? now.start + now.duration : 0,
+            epgId: now ? now.id : "",
+            begin: now ? now.start : 0,
+            percent: percent < 0 ? -1 : Math.max(0, Math.min(100, percent)),
             tip: tip.join("\n")
         }
     }
 
     /* a record timer for the programme that is on, from now to its end; the box adds
      * its own lead and follow-up time */
-    function record(cid, end, title) {
+    function record(cid, end, title, epgId, begin) {
         var now = Math.floor(Date.now() / 1000)
         if (end <= now)
             return
-        get("control/timer?action=new&type=5&channel_id=" + cid + "&alarm=" + now + "&stop=" + end + "&rs=1",
-            function(r) {
-                if (r !== null)
-                    showStatus("Recording: " + title)
-            })
+        var done = function(r) {
+            if (r !== null)
+                showStatus("Recording: " + title)
+        }
+        if (legacy) {
+            get("control/timer?action=new&type=5&channel_id=" + cid + "&alarm=" + now + "&stop=" + end + "&rs=1", done)
+            return
+        }
+        var body = { kind: "record", channel_id: cid, start: now, stop: end, title: title, recording_safety: true }
+        if (epgId) {
+            body.epg_id = epgId
+            body.epg_start = begin
+        }
+        post("api/v1/timers", body, done)
     }
 
     function stream(cid, name) {
-        get("control/streamurl?id=" + cid, function(url) {
-            url = (url || "").trim()
+        get((legacy ? "control/streamurl?id=" : "api/v1/stream/") + cid, function(text) {
+            var url = ""
+            try {
+                url = !text ? "" : legacy ? text.trim() : (JSON.parse(text).url || "").trim()
+            } catch (e) {
+            }
             if (!url) {
                 showStatus(name + ": no stream address", true)
                 return
@@ -476,13 +714,17 @@ ApplicationWindow {
     }
 
     function zapTo(cid) {
-        get("control/zapto?" + cid, function(r) {
+        var done = function(r) {
             if (r === null)
                 return
             currentChannel = cid
             showStatus("Switched channel")
             followOsd()
-        })
+        }
+        if (legacy)
+            get("control/zapto?" + cid, done)
+        else
+            post("api/v1/zap", { channel_id: cid }, done)
     }
 
     readonly property var keyboard: ({
@@ -655,7 +897,7 @@ ApplicationWindow {
                                 ToolTip.text: "Record the programme that is on"
                                 contentItem: IconImage { name: "media-record-symbolic"; color: root.fg; sourceSize: Qt.size(16, 16); fillMode: Image.Pad }
                                 background: Rectangle { color: recordButton.hovered ? root.line : "transparent"; radius: 4 }
-                                onClicked: root.record(model.cid, model.end, model.title)
+                                onClicked: root.record(model.cid, model.end, model.title, model.epgId, model.begin)
                             }
                             ToolButton {
                                 id: streamButton
@@ -722,24 +964,50 @@ ApplicationWindow {
                     }
                 }
 
-                Image {
-                    id: picture
+                Item {
+                    id: keysView
                     anchors.fill: parent
                     anchors.margins: 6
-                    fillMode: Image.PreserveAspectFit
-                    smooth: true
-                    mipmap: true
-                    cache: false
-                    onStatusChanged: {
-                        if (status === Image.Ready) {
-                            root.aspect = sourceSize.width / sourceSize.height
-                            root.fitToScreen()
-                            if (root.connected)
-                                root.showStatus("Connected to " + root.host)
-                            else
-                                root.showStatus(root.host + ": not reachable, last remote shown", true)
-                        } else if (status === Image.Error) {
-                            root.showStatus("Remote control picture not loaded", true)
+                    readonly property real s: root.canvasW > 0 ? Math.min(width / root.canvasW, height / root.canvasH) : 0
+                    readonly property real ox: (width - root.canvasW * s) / 2
+                    readonly property real oy: (height - root.canvasH * s) / 2
+
+                    Rectangle {
+                        visible: keysView.s > 0
+                        x: keysView.ox
+                        y: keysView.oy
+                        width: root.canvasW * keysView.s
+                        height: root.canvasH * keysView.s
+                        radius: 24 * keysView.s
+                        color: root.raised
+
+                        Repeater {
+                            model: root.areas
+                            Rectangle {
+                                readonly property var b: root.bounds(modelData)
+                                x: b.x * keysView.s
+                                y: b.y * keysView.s
+                                width: b.w * keysView.s
+                                height: b.h * keysView.s
+                                radius: modelData.shape === "circle" ? width / 2 : 5 * keysView.s
+                                color: modelData.color || "#3a4150"
+
+                                IconImage {
+                                    visible: !!modelData.icon
+                                    anchors.centerIn: parent
+                                    name: modelData.icon || ""
+                                    color: root.fg
+                                    sourceSize: Qt.size(Math.max(8, Math.min(parent.width, parent.height) * 0.55),
+                                                        Math.max(8, Math.min(parent.width, parent.height) * 0.55))
+                                }
+                                Text {
+                                    visible: !modelData.icon
+                                    anchors.centerIn: parent
+                                    text: modelData.label || ""
+                                    color: root.fg
+                                    font.pixelSize: Math.max(6, Math.min(parent.height * 0.45, 13 * keysView.s))
+                                }
+                            }
                         }
                     }
 
@@ -747,12 +1015,11 @@ ApplicationWindow {
                         model: [root.hot, root.flash]
                         Rectangle {
                             readonly property var b: modelData ? root.bounds(modelData) : null
-                            readonly property real s: picture.sourceSize.width > 0 ? picture.paintedWidth / picture.sourceSize.width : 0
-                            visible: b !== null && picture.status === Image.Ready
-                            x: b ? (picture.width - picture.paintedWidth) / 2 + b.x * s : 0
-                            y: b ? (picture.height - picture.paintedHeight) / 2 + b.y * s : 0
-                            width: b ? b.w * s : 0
-                            height: b ? b.h * s : 0
+                            visible: b !== null && keysView.s > 0
+                            x: b ? keysView.ox + b.x * keysView.s : 0
+                            y: b ? keysView.oy + b.y * keysView.s : 0
+                            width: b ? b.w * keysView.s : 0
+                            height: b ? b.h * keysView.s : 0
                             radius: modelData && modelData.shape === "circle" ? width / 2 : 3
                             color: index === 0 ? Qt.rgba(0.4, 0.68, 0.91, 0.25) : Qt.rgba(0.4, 0.68, 0.91, 0.6)
                         }
@@ -796,6 +1063,73 @@ ApplicationWindow {
         title: "Put the box into standby?"
         standardButtons: Dialog.Cancel | Dialog.Ok
         onAccepted: root.sendRaw("KEY_POWER")
+    }
+
+    Dialog {
+        id: loginDialog
+        anchors.centerIn: parent
+        modal: true
+        title: "Sign in to " + root.host
+        closePolicy: Popup.CloseOnEscape
+        onRejected: root.finishSignIn(false)
+
+        ColumnLayout {
+            spacing: 8
+            Label {
+                id: loginNote
+                Layout.preferredWidth: 240
+                wrapMode: Text.WordWrap
+            }
+            TextField {
+                id: userField
+                Layout.fillWidth: true
+                text: "root"
+                placeholderText: "Name"
+            }
+            TextField {
+                id: passField
+                Layout.fillWidth: true
+                echoMode: TextInput.Password
+                placeholderText: "Password"
+                onAccepted: root.submitSignIn()
+            }
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                Button { text: "Cancel"; onClicked: loginDialog.reject() }
+                Button { id: signInButton; text: "Sign in"; onClicked: root.submitSignIn() }
+            }
+            Rectangle { Layout.fillWidth: true; height: 1; color: root.line }
+            Label {
+                Layout.preferredWidth: 240
+                wrapMode: Text.WordWrap
+                color: root.dim
+                text: "Or with a token the box knows, which lasts beyond a restart of the box:"
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                TextField {
+                    id: tokenField
+                    Layout.fillWidth: true
+                    placeholderText: "Token"
+                    onAccepted: if (text.trim()) root.useToken()
+                }
+                Button { text: "Generate"; onClicked: tokenField.text = native.randomHex(16) }
+            }
+            Label {
+                id: tokenHint
+                Layout.preferredWidth: 240
+                visible: tokenField.text.trim() !== ""
+                wrapMode: Text.WrapAnywhere
+                font.pixelSize: 11
+                color: root.dim
+                text: root.tokenLines(tokenField.text.trim())
+            }
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                Button { text: "Copy line"; enabled: tokenField.text.trim() !== ""; onClicked: native.copyText(tokenHint.text) }
+                Button { id: useTokenButton; text: "Use token"; enabled: tokenField.text.trim() !== ""; onClicked: root.useToken() }
+            }
+        }
     }
 
     Component.onCompleted: {

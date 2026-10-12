@@ -9,7 +9,7 @@ datadir = get_option('prefix') / get_option('datadir')
 pkgdatadir = datadir / meson.project_name()
 
 install_data('src/neutrino-remote', install_dir: get_option('bindir'), install_mode: 'rwxr-xr-x')
-install_data('src/remote.py', install_dir: pkgdatadir)
+install_data('src/remote.py', 'data/remote-layout.json', install_dir: pkgdatadir)
 install_data('data' / app_id + '.desktop', install_dir: datadir / 'applications')
 install_data('data' / app_id + '.svg', install_dir: datadir / 'icons/hicolor/scalable/apps')
 install_data('data' / app_id + '-symbolic.svg', install_dir: datadir / 'icons/hicolor/symbolic/apps')
@@ -21,7 +21,7 @@ endif
 if get_option('qt').allowed()
   build_qt = add_languages('cpp', native: false, required: get_option('qt'))
   if build_qt
-    qt_dep = dependency('qt6', modules: ['Core', 'Gui', 'Qml', 'Quick'], required: get_option('qt'))
+    qt_dep = dependency('qt6', modules: ['Core', 'Gui', 'Network', 'Qml', 'Quick'], required: get_option('qt'))
     if qt_dep.found()
       qml_file = pkgdatadir / 'neutrino-remote.qml'
       moc_files = import('qt6').compile_moc(headers: 'qt/native.h', dependencies: qt_dep)

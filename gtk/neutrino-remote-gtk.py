@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """GTK4 frontend of neutrino-remote: neutrino-remote-gtk.py [HOST]"""
 
+import json
 import os
 import sys
 import time
@@ -13,7 +14,8 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Graphene", "1.0")
 gi.require_version("Gsk", "4.0")
 gi.require_version("Soup", "3.0")
-from gi.repository import Gdk, Gio, GLib, GObject, Graphene, Gsk, Gtk, Soup  # noqa: E402
+gi.require_version("Pango", "1.0")
+from gi.repository import Gdk, Gio, GLib, GObject, Graphene, Gsk, Gtk, Pango, Soup  # noqa: E402
 
 _here = os.path.dirname(os.path.realpath(__file__))
 sys.path[:0] = [_here, os.path.join(os.path.dirname(_here), "src")]
@@ -32,6 +34,7 @@ entry { background-color: #272c36; color: #d7dce5; }
 .epg { color: #8b95a6; font-size: smaller; }
 progressbar.epg trough, progressbar.epg progress { min-height: 3px; }
 progressbar.epg trough { background-color: #333a47; }
+remoteview { font-size: 9pt; }
 progressbar.epg progress { background-color: #67aee8; }
 paned > separator { background: #333a47; min-height: 1px; opacity: 0; }
 paned > separator:hover { opacity: 1; }
@@ -123,13 +126,18 @@ class Tray:
 
 
 class RemoteView(Gtk.Widget):
-    """The remote control picture; a click on a key area sends that key."""
+    """The remote control, drawn from a layout; a click on a key sends it."""
 
     __gsignals__ = {"key": (GObject.SignalFlags.RUN_FIRST, None, (str,))}
 
+    BODY = "#272c36"
+    BUTTON = "#3a4150"
+    LABEL = "#d7dce5"
+
     def __init__(self):
         super().__init__()
-        self.texture = None
+        self.set_css_name("remoteview")
+        self.canvas = None
         self.areas = []
         self.hot = None
         self.flash = None
@@ -146,18 +154,20 @@ class RemoteView(Gtk.Widget):
         self.set_has_tooltip(True)
         self.connect("query-tooltip", self.on_tooltip)
 
-    def set_remote(self, texture, areas):
-        self.texture, self.areas, self.hot = texture, areas, None
+    def set_drawn(self, layout):
+        self.hot = None
+        self.canvas = (layout["width"], layout["height"])
+        self.areas = layout["keys"]
         self.queue_resize()
 
     def geometry(self):
         w, h = self.get_width(), self.get_height()
-        tw, th = self.texture.get_width(), self.texture.get_height()
+        tw, th = self.canvas
         scale = min(w / tw, h / th)
         return scale, (w - tw * scale) / 2, (h - th * scale) / 2
 
     def area_at(self, x, y):
-        if not self.texture:
+        if not self.canvas:
             return None
         scale, ox, oy = self.geometry()
         px, py = (x - ox) / scale, (y - oy) / scale
@@ -210,19 +220,62 @@ class RemoteView(Gtk.Widget):
         return False
 
     def do_measure(self, orientation, _for_size):
-        if not self.texture:
+        if not self.canvas:
             return 120, 200, -1, -1
+        tw, th = self.canvas
         if orientation == Gtk.Orientation.HORIZONTAL:
-            return self.texture.get_width() // 2, self.texture.get_width(), -1, -1
-        return self.texture.get_height() // 2, self.texture.get_height(), -1, -1
+            return tw // 2, tw, -1, -1
+        return th // 2, th, -1, -1
+
+    @staticmethod
+    def rgba(spec):
+        color = Gdk.RGBA()
+        color.parse(spec)
+        return color
+
+    def rounded(self, snapshot, rect, radius, color):
+        clip = Gsk.RoundedRect()
+        clip.init_from_rect(rect, radius)
+        snapshot.push_rounded_clip(clip)
+        snapshot.append_color(color, rect)
+        snapshot.pop()
+
+    def draw_keys(self, snapshot, scale, ox, oy):
+        tw, th = self.canvas
+        self.rounded(snapshot, Graphene.Rect().init(ox, oy, tw * scale, th * scale), 24 * scale, self.rgba(self.BODY))
+        theme = Gtk.IconTheme.get_for_display(self.get_display())
+        label_color = self.rgba(self.LABEL)
+        for area in self.areas:
+            x, y, w, h = remote.area_bounds(area)
+            r = Graphene.Rect().init(ox + x * scale, oy + y * scale, w * scale, h * scale)
+            radius = w * scale / 2 if area["shape"] == "circle" else 5 * scale
+            self.rounded(snapshot, r, radius, self.rgba(area.get("color", self.BUTTON)))
+            if area.get("icon"):
+                size = int(min(w, h) * scale * 0.55)
+                icon = theme.lookup_icon(area["icon"], None, max(size, 8), self.get_scale_factor(),
+                                         Gtk.TextDirection.NONE, 0)
+                snapshot.save()
+                snapshot.translate(Graphene.Point().init(r.get_x() + (r.get_width() - size) / 2,
+                                                         r.get_y() + (r.get_height() - size) / 2))
+                icon.snapshot_symbolic(snapshot, size, size, [label_color])
+                snapshot.restore()
+            elif area.get("label"):
+                layout = self.create_pango_layout(area["label"])
+                font = layout.get_context().get_font_description() or Pango.FontDescription()
+                font.set_absolute_size(min(h * 0.45, 13) * scale * Pango.SCALE)
+                layout.set_font_description(font)
+                lw, lh = layout.get_pixel_size()
+                snapshot.save()
+                snapshot.translate(Graphene.Point().init(r.get_x() + (r.get_width() - lw) / 2,
+                                                         r.get_y() + (r.get_height() - lh) / 2))
+                snapshot.append_layout(layout, label_color)
+                snapshot.restore()
 
     def do_snapshot(self, snapshot):
-        if not self.texture:
+        if not self.canvas:
             return
         scale, ox, oy = self.geometry()
-        rect = Graphene.Rect().init(ox, oy, self.texture.get_width() * scale,
-                                    self.texture.get_height() * scale)
-        snapshot.append_scaled_texture(self.texture, Gsk.ScalingFilter.TRILINEAR, rect)
+        self.draw_keys(snapshot, scale, ox, oy)
         for area, rgba in ((self.hot, "rgba(103,174,232,0.25)"), (self.flash, "rgba(103,174,232,0.6)")):
             if not area:
                 continue
@@ -246,8 +299,11 @@ class Window(Gtk.ApplicationWindow):
         self.aspect = 188 / 762
         self.connect("map", self.on_map)
         self.session = Soup.Session(timeout=5)
+        self.login_dialog = None
+        self.waiting = []
         self.host = host
         self.base = remote.base_url(host)
+        self.api = remote.API
 
         header = Gtk.HeaderBar()
         self.set_titlebar(header)
@@ -356,15 +412,45 @@ class Window(Gtk.ApplicationWindow):
         self.set_default_size(width, view_h + header)
 
     def get(self, path, callback, raw=False, quiet=False):
-        msg = Soup.Message.new("GET", urllib.parse.urljoin(self.base, path))
+        self.request("GET", path, None, callback, raw, quiet)
+
+    def post(self, path, body, callback, quiet=False):
+        self.request("POST", path, body, callback, False, quiet)
+
+    def send(self, req, callback, quiet=False):
+        method, path, body = req
+        self.request(method, path, body, callback, False, quiet)
+
+    def request(self, method, path, body, callback, raw=False, quiet=False, retried=False):
+        msg = Soup.Message.new(method, urllib.parse.urljoin(self.base, path))
         if msg is None:
             self.show_status("Invalid address", True)
             return
+        headers = msg.get_request_headers()
+        token = remote.load_token(self.host)
+        login = None if token else remote.load_session(self.host)
+        if token:
+            headers.append("Authorization", "Bearer " + token)
+        elif login:
+            headers.append("Cookie", f"{remote.SESSION_COOKIE}={login[0]}")
+            if method != "GET":
+                headers.append(remote.CSRF_HEADER, login[1])
+        if body is not None:
+            msg.set_request_body_from_bytes("application/json", GLib.Bytes.new(json.dumps(body).encode()))
 
         def done(session, result):
             try:
                 data = session.send_and_read_finish(result).get_data()
-                if msg.get_status() != 200:
+                if (msg.get_status() == 403 and self.api == remote.API and not retried
+                        and path.startswith("api/v1/")):
+                    if token:
+                        remote.clear_token(self.host)
+                    elif login:
+                        remote.clear_session(self.host)
+                    self.sign_in(lambda ok: self.request(method, path, body, callback, raw, quiet, True)
+                                 if ok else callback(None), token_refused=bool(token))
+                    return
+                if msg.get_status() // 100 != 2:
                     raise GLib.Error(f"HTTP {msg.get_status()}")
             except GLib.Error as err:
                 if not quiet:
@@ -374,6 +460,124 @@ class Window(Gtk.ApplicationWindow):
             callback(data if raw else data.decode("utf-8", "replace"))
 
         self.session.send_and_read_async(msg, GLib.PRIORITY_DEFAULT, None, done)
+
+    def sign_in(self, then, token_refused=False):
+        """A box that wants a sign-in for this asks for its name and password, or for a
+        token it knows; what it answers with, or the token, is kept for the box, the
+        password is not. Requests that come in while the dialog is open wait for it."""
+        self.waiting.append(then)
+        if self.login_dialog:
+            return
+        dialog = Gtk.Window(title=f"Sign in to {self.host}", transient_for=self, modal=True,
+                            resizable=False)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_top=12,
+                      margin_bottom=12, margin_start=12, margin_end=12)
+        user = Gtk.Entry(text=remote.LOGIN_USER, placeholder_text="Name")
+        password = Gtk.PasswordEntry(placeholder_text="Password", show_peek_icon=True)
+        note = Gtk.Label(label="The box did not take the token." if token_refused
+                         else "The box asks for a sign-in to be controlled.", xalign=0, wrap=True,
+                         max_width_chars=30)
+        note.add_css_class("status")
+        if token_refused:
+            note.add_css_class("error")
+        buttons = Gtk.Box(spacing=6, halign=Gtk.Align.END)
+        cancel = Gtk.Button(label="Cancel")
+        ok = Gtk.Button(label="Sign in")
+        ok.add_css_class("suggested-action")
+        buttons.append(cancel)
+        buttons.append(ok)
+
+        token_note = Gtk.Label(label="Or with a token the box knows, which lasts beyond a restart of the box:",
+                               xalign=0, wrap=True, max_width_chars=30)
+        token_note.add_css_class("status")
+        token = Gtk.Entry(placeholder_text="Token", hexpand=True, width_chars=12)
+        generate = Gtk.Button(label="Generate")
+        generate.set_tooltip_text("A new token, to be entered on the box")
+        token_row = Gtk.Box(spacing=6)
+        token_row.append(token)
+        token_row.append(generate)
+        lines = Gtk.Label(xalign=0, selectable=True, wrap=True, wrap_mode=Pango.WrapMode.CHAR,
+                          max_width_chars=30, visible=False)
+        lines.add_css_class("epg")
+        token_buttons = Gtk.Box(spacing=6, halign=Gtk.Align.END)
+        copy = Gtk.Button(label="Copy line", sensitive=False)
+        use = Gtk.Button(label="Use token", sensitive=False)
+        token_buttons.append(copy)
+        token_buttons.append(use)
+        for w in (note, user, password, buttons, Gtk.Separator(), token_note, token_row, lines, token_buttons):
+            box.append(w)
+
+        def token_changed(*_):
+            text = token.get_text().strip()
+            lines.set_label(remote.token_lines(text) if text else "")
+            lines.set_visible(bool(text))
+            copy.set_sensitive(bool(text))
+            use.set_sensitive(bool(text))
+
+        token.connect("changed", token_changed)
+        generate.connect("clicked", lambda *_: token.set_text(remote.new_token()))
+        copy.connect("clicked", lambda *_: self.get_clipboard().set(lines.get_label()))
+
+        def use_token(*_):
+            remote.save_token(self.host, token.get_text())
+            self.show_status(f"Token kept for {self.host}")
+            finish(True)
+
+        use.connect("clicked", use_token)
+        token.connect("activate", lambda *_: use.get_sensitive() and use_token())
+        dialog.set_child(box)
+        dialog.set_default_widget(ok)
+        password.connect("activate", lambda *_: submit())
+        self.login_dialog = dialog
+
+        def finish(success):
+            self.login_dialog = None
+            dialog.destroy()
+            waiting, self.waiting = self.waiting, []
+            for w in waiting:
+                w(success)
+
+        def answered(msg, text):
+            ok.set_sensitive(True)
+            status = msg.get_status()
+            if status == 200:
+                try:
+                    csrf = json.loads(text).get("csrf", "")
+                except ValueError:
+                    csrf = ""
+                cookie = remote.session_cookie(msg.get_response_headers().get_one("Set-Cookie"))
+                if cookie and csrf:
+                    remote.save_session(self.host, cookie, csrf)
+                    self.show_status(f"Signed in to {self.host}")
+                    finish(True)
+                    return
+            note.set_label({401: "Name and password do not go together.",
+                            429: "Too many wrong attempts, wait a moment."}.get(status, f"Sign-in failed (HTTP {status})."))
+            note.add_css_class("error")
+
+        def submit(*_):
+            ok.set_sensitive(False)
+            msg = Soup.Message.new("POST", urllib.parse.urljoin(self.base, remote.LOGIN_PATH))
+            body = {"user": user.get_text(), "password": password.get_text()}
+            msg.set_request_body_from_bytes("application/json", GLib.Bytes.new(json.dumps(body).encode()))
+
+            def done(session, result):
+                try:
+                    text = session.send_and_read_finish(result).get_data().decode("utf-8", "replace")
+                except GLib.Error as err:
+                    ok.set_sensitive(True)
+                    note.set_label(err.message)
+                    note.add_css_class("error")
+                    return
+                answered(msg, text)
+
+            self.session.send_and_read_async(msg, GLib.PRIORITY_DEFAULT, None, done)
+
+        ok.connect("clicked", submit)
+        cancel.connect("clicked", lambda *_: finish(False))
+        dialog.connect("close-request", lambda *_: (finish(False), True)[1] if self.login_dialog else False)
+        dialog.present()
+        password.grab_focus()
 
     def show_status(self, text, error=False):
         self.status.set_text(text)
@@ -386,52 +590,46 @@ class Window(Gtk.ApplicationWindow):
         self.host, self.base = host, remote.base_url(host)
         remote.save_host(host)
         self.show_status(f"Connecting to {host} ...")
-        self.get("Y_Tools_Rcsim.yhtm", self.on_page)
+        self.show_drawn()
 
-    def on_page(self, html):
-        if html is None:
-            self.show_cached()
+    def show_drawn(self):
+        """The drawn remote control; whether the box is there, and which API it speaks,
+        is asked of it."""
+        layout = remote.load_layout()
+        if not layout:
+            self.show_status("remote-layout.json not found", True)
             return
-        parsed = remote.parse_remote(html, self.base)
-        if not parsed:
-            self.show_status(f"{self.host}: no remote control in the web interface", True)
-            return
+        self.view.set_drawn(layout)
+        self.aspect = layout["width"] / layout["height"]
+        self.fit_to_monitor()
+        self.set_focus(self.view)
 
-        def on_image(data):
-            if data is None:
-                self.show_cached()
-                return
-            if not self.show_remote(data, parsed["areas"]):
-                return
-            remote.save_cache(self.host, parsed["areas"], data)
-            self.show_status(f"Connected to {self.host}")
+        def answered(api):
+            self.api = api
+            self.show_status(f"Connected to {self.host}" + ("" if api == remote.API else " (control API)"))
             if self.side.get_visible():
                 self.load_bouquets()
 
-        self.get(parsed["image"], on_image, raw=True)
+        def control(text):
+            if text is not None:
+                answered(remote.CONTROL)
 
-    def show_remote(self, data, areas):
-        try:
-            texture = Gdk.Texture.new_from_bytes(GLib.Bytes.new(data))
-        except GLib.Error as err:
-            self.show_status(f"Remote control picture: {err.message}", True)
-            return False
-        self.view.set_remote(texture, areas)
-        self.aspect = texture.get_width() / texture.get_height()
-        self.fit_to_monitor()
-        self.set_focus(self.view)
-        return True
+        def probed(text):
+            if text is not None:
+                answered(remote.API)
+            else:
+                self.get(remote.CONTROL_PROBE_PATH, control)
 
-    def show_cached(self):
-        cached = remote.load_cache(self.host)
-        if cached and self.show_remote(cached[1], cached[0]):
-            self.show_status(f"{self.host}: not reachable, last remote shown", True)
+        self.get(remote.PROBE_PATH, probed, quiet=True)
 
     def send_key(self, key):
         if key == "KEY_POWER":
-            self.get("control/standby", lambda state: self.confirm_power(state))
+            self.get(remote.standby_path(self.api), lambda state: self.confirm_power(state))
             return
-        self.get("control/rcem?" + key, lambda r: r is not None and self.key_sent(key[4:]))
+        self.press(key)
+
+    def press(self, key):
+        self.send(remote.key_request(self.api, key), lambda r: r is not None and self.key_sent(key[4:]))
 
     def key_sent(self, name):
         self.show_status(f"{name} sent")
@@ -480,20 +678,31 @@ class Window(Gtk.ApplicationWindow):
                     pass
             shown()
 
+        shot = f"{remote.osd_shot_path(self.api)}&at={int(time.time() * 1000) % 2 ** 32}"
+        image = remote.osd_image_path(self.api)
+        if not image:
+            self.get(shot, on_image, raw=True, quiet=True)
+            return
+
         def on_shot(result):
             if result is None:
                 shown()
                 return
-            self.get(remote.OSD_IMAGE, on_image, raw=True, quiet=True)
+            self.get(f"{image}?{int(time.time() * 1000)}", on_image, raw=True, quiet=True)
 
-        self.get(remote.OSD_SHOT, on_shot, quiet=True)
+        self.get(shot, on_shot, quiet=True)
 
     def confirm_power(self, state):
         if state is None:
             self.start_local()
             return
-        if state.strip() != "off":
-            self.get("control/rcem?KEY_POWER", lambda r: r is not None and self.key_sent("POWER"))
+        try:
+            standby = remote.standby_on(self.api, state)
+        except (ValueError, AttributeError):
+            self.show_status("Standby state not readable", True)
+            return
+        if standby:
+            self.press("KEY_POWER")
             return
         dialog = Gtk.AlertDialog(message="Put the box into standby?", buttons=["Cancel", "Standby"],
                                  cancel_button=0, default_button=1)
@@ -501,7 +710,7 @@ class Window(Gtk.ApplicationWindow):
         def answered(d, result):
             try:
                 if d.choose_finish(result) == 1:
-                    self.get("control/rcem?KEY_POWER", lambda r: r is not None and self.key_sent("POWER"))
+                    self.press("KEY_POWER")
             except GLib.Error:
                 pass
 
@@ -531,7 +740,7 @@ class Window(Gtk.ApplicationWindow):
             else:
                 self.show_status("Neutrino did not come up", True)
 
-        self.get("control/standby", done, quiet=True)
+        self.get(remote.standby_path(self.api), done, quiet=True)
         return False
 
     def on_key(self, _ctl, keyval, _code, state):
@@ -559,7 +768,7 @@ class Window(Gtk.ApplicationWindow):
             if text is None:
                 return
             try:
-                bouquets = remote.parse_bouquets(text)
+                bouquets = remote.parse_bouquets(self.api, text)
             except (ValueError, KeyError):
                 self.show_status("Bouquet list not readable", True)
                 return
@@ -569,25 +778,68 @@ class Window(Gtk.ApplicationWindow):
                 self.bouquets.set_selected(0)
                 self.on_bouquet()
 
-        self.get("control/getbouquets?format=json", done)
+        self.get(remote.bouquets_path(self.api), done)
 
     def on_bouquet(self, *_):
         index = self.bouquets.get_selected()
         if index >= len(self.bouquet_numbers):
             return
         number = self.bouquet_numbers[index]
+        api = self.api
+
+        def with_current(channels):
+            def done(text):
+                try:
+                    current = remote.current_id(api, text)
+                except ValueError:
+                    current = ""
+                self.fill_channels(channels, current)
+
+            self.get(remote.current_path(api), done, quiet=True)
+
+        if api == remote.CONTROL:
+            def listed(text):
+                if text is None:
+                    return
+                try:
+                    channels = remote.parse_control_channels(text)
+                except (ValueError, KeyError):
+                    self.show_status("Channel list not readable", True)
+                    return
+                with_current(channels)
+
+            self.get(remote.control_channels_path(number), listed)
+            return
+
+        def with_channels(channels):
+            self.get_all(lambda cursor: remote.grid_path(number, cursor),
+                         lambda grid: with_current(remote.build_channels(channels, grid or [])), quiet=True)
+
+        self.get_all(lambda cursor: remote.channels_path(number, cursor),
+                     lambda channels: channels is not None and with_channels(channels))
+
+    def get_all(self, path_of, callback, quiet=False, items=None, cursor=None):
+        """Every page of a list, handed on as one list; None when a page failed."""
+        items = items if items is not None else []
 
         def done(text):
             if text is None:
+                callback(None)
                 return
             try:
-                channels = remote.parse_channels(text)
-            except (ValueError, KeyError):
-                self.show_status("Channel list not readable", True)
+                page, following = remote.parse_page(text)
+            except (ValueError, AttributeError):
+                if not quiet:
+                    self.show_status("List not readable", True)
+                callback(None)
                 return
-            self.get("control/zapto", lambda current: self.fill_channels(channels, (current or "").strip()))
+            items.extend(page)
+            if following:
+                self.get_all(path_of, callback, quiet, items, following)
+            else:
+                callback(items)
 
-        self.get(f"control/getbouquet?bouquet={number}&format=json&epg=true&epginfo=false", done)
+        self.get(path_of(cursor), done, quiet=quiet)
 
     def fill_channels(self, channels, current):
         rows = []
@@ -610,7 +862,7 @@ class Window(Gtk.ApplicationWindow):
                 row.epg_bar.set_fraction(max(now["percent"], 0) / 100)
             row.set_tooltip_text(remote.epg_tooltip(channel))
             row.channel = channel
-            row.record.set_visible(remote.record_path(channel) is not None)
+            row.record.set_visible(remote.record_request(self.api, channel) is not None)
             row.stream.set_visible(not remote.is_local(self.host))
 
     def channel_row(self, channel):
@@ -646,15 +898,18 @@ class Window(Gtk.ApplicationWindow):
         return row
 
     def record(self, channel):
-        path = remote.record_path(channel)
-        if not path:
+        req = remote.record_request(self.api, channel)
+        if not req:
             return
         title = channel["now"]["title"]
-        self.get(path, lambda r: r is not None and self.show_status(f"Recording: {title}"))
+        self.send(req, lambda r: r is not None and self.show_status(f"Recording: {title}"))
 
     def stream(self, channel):
-        def done(url):
-            url = (url or "").strip()
+        def done(text):
+            try:
+                url = remote.stream_url(self.api, text).strip()
+            except ValueError:
+                url = ""
             if not url:
                 self.show_status(f"{channel['name']}: no stream address", True)
                 return
@@ -671,7 +926,7 @@ class Window(Gtk.ApplicationWindow):
                 return
             self.show_status(f"Streaming {channel['name']}")
 
-        self.get(remote.stream_path(channel), done)
+        self.get(remote.stream_path(self.api, channel["id"]), done)
 
     def refresh_epg(self):
         if not self.side.get_visible():
@@ -691,7 +946,7 @@ class Window(Gtk.ApplicationWindow):
                 (child.name_label.add_css_class if child is row else child.name_label.remove_css_class)("current")
                 child = child.get_next_sibling()
 
-        self.get("control/zapto?" + row.channel_id, done)
+        self.send(remote.zap_request(self.api, row.channel_id), done)
 
 
 class App(Gtk.Application):
