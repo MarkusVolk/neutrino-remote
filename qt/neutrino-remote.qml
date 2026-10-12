@@ -28,6 +28,12 @@ ApplicationWindow {
     property var bouquetNumbers: []
     property string currentChannel: ""
     property real aspect: 188 / 762
+    property bool osdBusy: false
+    property bool osdAgain: false
+    property int osdShown: 0
+    property real lastKey: 0
+    readonly property string osdShot: "control/screenshot?name=neutrino-remote&osd=1&video=0&format=png"
+    readonly property string osdImage: "tmp/neutrino-remote.png"
 
     title: "Neutrino Remote"
     color: bg
@@ -38,7 +44,7 @@ ApplicationWindow {
         var viewH = Math.round(Screen.height * 0.6) - header
         var w = Math.max(260, Math.round(viewH * aspect) + 24)
         if (sideBar.visible)
-            w += Math.max(280, Math.round(Screen.width * 0.15))
+            w += Math.max(320, Math.round(Screen.width * 0.25))
         width = w
         height = viewH + header
     }
@@ -297,9 +303,66 @@ ApplicationWindow {
 
     function sendRaw(key) {
         get("control/rcem?" + key, function(r) {
-            if (r !== null)
+            if (r !== null) {
                 showStatus(key.substring(4) + " sent")
+                followOsd()
+            }
         })
+    }
+
+    /* the screen follows the last key of a row: a shot when the keys have stopped
+     * for a moment, and one more for a channel change */
+    function followOsd() {
+        lastKey = Date.now()
+        osdSoon.restart()
+        osdLate.restart()
+    }
+
+    function grabOsd() {
+        if (!sideBar.visible)
+            return
+        if (osdBusy) {
+            osdAgain = true
+            return
+        }
+        osdBusy = true
+        get(osdShot, function(r) {
+            if (r === null) {
+                osdDone()
+                return
+            }
+            var back = osdShown === 0 ? osdB : osdA
+            back.source = base + osdImage + "?" + Date.now()
+        }, true)
+    }
+
+    function osdDone() {
+        osdBusy = false
+        if (osdAgain) {
+            osdAgain = false
+            grabOsd()
+        }
+    }
+
+    function osdLoaded(index, image) {
+        if (image.status === Image.Ready) {
+            osdShown = index
+            osdDone()
+        } else if (image.status === Image.Error) {
+            osdDone()
+        }
+    }
+
+    Timer { id: osdSoon; interval: 250; onTriggered: root.grabOsd() }
+    Timer { id: osdLate; interval: 2000; onTriggered: root.grabOsd() }
+    Timer {
+        interval: 5000
+        repeat: true
+        running: sideBar.visible
+        onTriggered: {
+            if (Date.now() - root.lastKey > 2000)
+                root.grabOsd()
+        }
     }
 
     function loadBouquets() {
@@ -376,6 +439,7 @@ ApplicationWindow {
                 return
             currentChannel = cid
             showStatus("Switched channel")
+            followOsd()
         })
     }
 
@@ -436,8 +500,10 @@ ApplicationWindow {
                 onToggled: {
                     sideBar.visible = checked
                     root.fitToScreen()
-                    if (checked)
+                    if (checked) {
                         root.loadBouquets()
+                        root.grabOsd()
+                    }
                 }
             }
             ToolButton {
@@ -469,7 +535,9 @@ ApplicationWindow {
             id: sideBar
             visible: false
             Layout.fillHeight: true
-            Layout.preferredWidth: Math.max(280, Math.round(Screen.width * 0.15)) - 6
+            Layout.preferredWidth: Math.max(320, Math.round(Screen.width * 0.25)) - 6
+            Layout.minimumWidth: Layout.preferredWidth
+            Layout.maximumWidth: Layout.preferredWidth
             spacing: 4
 
             ComboBox {
@@ -528,6 +596,35 @@ ApplicationWindow {
                             }
                         }
                     }
+                }
+            }
+
+            Item {
+                Layout.fillWidth: true
+                Layout.preferredHeight: width * 9 / 16
+                ToolTip.visible: osdHover.hovered
+                ToolTip.text: "Screen of the box"
+                HoverHandler { id: osdHover }
+
+                Image {
+                    id: osdA
+                    anchors.fill: parent
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true
+                    mipmap: true
+                    cache: false
+                    visible: root.osdShown === 0
+                    onStatusChanged: root.osdLoaded(0, osdA)
+                }
+                Image {
+                    id: osdB
+                    anchors.fill: parent
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true
+                    mipmap: true
+                    cache: false
+                    visible: root.osdShown === 1
+                    onStatusChanged: root.osdLoaded(1, osdB)
                 }
             }
         }

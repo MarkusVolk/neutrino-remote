@@ -3,6 +3,7 @@
 
 import os
 import sys
+import time
 import urllib.parse
 
 import gi
@@ -283,7 +284,17 @@ class Window(Gtk.ApplicationWindow):
         self.side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, width_request=260)
         self.side.append(self.bouquets)
         self.side.append(scroll)
+        self.osd = Gtk.Picture(content_fit=Gtk.ContentFit.CONTAIN, can_shrink=True)
+        self.osd.set_tooltip_text("Screen of the box")
+        osd_frame = Gtk.AspectFrame(ratio=16 / 9, obey_child=False, vexpand=True)
+        osd_frame.set_child(self.osd)
+        self.side.append(osd_frame)
         self.side.set_visible(False)
+        self.osd_timers = []
+        self.osd_busy = False
+        self.osd_again = False
+        self.osd_idle = 0
+        self.last_key = 0
 
         box = Gtk.Box(spacing=6)
         box.append(left)
@@ -329,7 +340,7 @@ class Window(Gtk.ApplicationWindow):
         view_h = int(area.height * 0.6) - header
         width = max(260, int(view_h * self.aspect) + 24)
         if self.side.get_visible():
-            side = max(280, int(area.width * 0.15))
+            side = max(320, int(area.width * 0.25))
             self.side.set_size_request(side, -1)
             width += side + 6
         self.set_default_size(width, view_h + header)
@@ -410,14 +421,69 @@ class Window(Gtk.ApplicationWindow):
         if key == "KEY_POWER":
             self.get("control/standby", lambda state: self.confirm_power(state))
             return
-        self.get("control/rcem?" + key, lambda r: r is not None and self.show_status(f"{key[4:]} sent"))
+        self.get("control/rcem?" + key, lambda r: r is not None and self.key_sent(key[4:]))
+
+    def key_sent(self, name):
+        self.show_status(f"{name} sent")
+        self.follow_osd()
+
+    def follow_osd(self):
+        """The screen follows the last key of a row: a shot when the keys have stopped
+        for a moment, and one more for a channel change."""
+        self.last_key = time.monotonic()
+        for timer in self.osd_timers:
+            GLib.source_remove(timer)
+        self.osd_timers = [GLib.timeout_add(ms, self.osd_timeout) for ms in remote.OSD_AFTER_KEY]
+
+    def osd_timeout(self):
+        self.osd_timers = self.osd_timers[1:]
+        self.grab_osd()
+        return False
+
+    def idle_osd(self):
+        if not self.side.get_visible():
+            self.osd_idle = 0
+            return False
+        if time.monotonic() - self.last_key > remote.OSD_AFTER_KEY[-1] / 1000:
+            self.grab_osd()
+        return True
+
+    def grab_osd(self):
+        if not self.side.get_visible():
+            return
+        if self.osd_busy:
+            self.osd_again = True
+            return
+        self.osd_busy = True
+
+        def shown():
+            self.osd_busy = False
+            if self.osd_again:
+                self.osd_again = False
+                self.grab_osd()
+
+        def on_image(data):
+            if data:
+                try:
+                    self.osd.set_paintable(Gdk.Texture.new_from_bytes(GLib.Bytes.new(data)))
+                except GLib.Error:
+                    pass
+            shown()
+
+        def on_shot(result):
+            if result is None:
+                shown()
+                return
+            self.get(remote.OSD_IMAGE, on_image, raw=True, quiet=True)
+
+        self.get(remote.OSD_SHOT, on_shot, quiet=True)
 
     def confirm_power(self, state):
         if state is None:
             self.start_local()
             return
         if state.strip() != "off":
-            self.get("control/rcem?KEY_POWER", lambda r: r is not None and self.show_status("POWER sent"))
+            self.get("control/rcem?KEY_POWER", lambda r: r is not None and self.key_sent("POWER"))
             return
         dialog = Gtk.AlertDialog(message="Put the box into standby?", buttons=["Cancel", "Standby"],
                                  cancel_button=0, default_button=1)
@@ -425,7 +491,7 @@ class Window(Gtk.ApplicationWindow):
         def answered(d, result):
             try:
                 if d.choose_finish(result) == 1:
-                    self.get("control/rcem?KEY_POWER", lambda r: r is not None and self.show_status("POWER sent"))
+                    self.get("control/rcem?KEY_POWER", lambda r: r is not None and self.key_sent("POWER"))
             except GLib.Error:
                 pass
 
@@ -474,6 +540,9 @@ class Window(Gtk.ApplicationWindow):
             self.load_bouquets()
             if not self.epg_timer:
                 self.epg_timer = GLib.timeout_add_seconds(60, self.refresh_epg)
+            self.grab_osd()
+            if not self.osd_idle:
+                self.osd_idle = GLib.timeout_add_seconds(remote.OSD_IDLE, self.idle_osd)
 
     def load_bouquets(self):
         def done(text):
@@ -565,6 +634,7 @@ class Window(Gtk.ApplicationWindow):
             if result is None:
                 return
             self.show_status("Switched channel")
+            self.follow_osd()
             child = self.channel_list.get_first_child()
             while child:
                 (child.name_label.add_css_class if child is row else child.name_label.remove_css_class)("current")

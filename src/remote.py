@@ -159,6 +159,13 @@ def area_bounds(area):
     return min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)
 
 
+OSD_NAME = "neutrino-remote"
+OSD_SHOT = f"control/screenshot?name={OSD_NAME}&osd=1&video=0&format=png"
+OSD_IMAGE = f"tmp/{OSD_NAME}.png"
+OSD_AFTER_KEY = (250, 2000)
+OSD_IDLE = 5
+
+
 def parse_bouquets(text):
     data = json.loads(text).get("data", {})
     return [(b["number"], b["name"]) for b in data.get("bouquets", [])]
