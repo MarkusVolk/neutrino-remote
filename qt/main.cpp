@@ -1,4 +1,4 @@
-#include <QGuiApplication>
+#include <QApplication>
 #include <QIcon>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -9,7 +9,7 @@
 int main(int argc, char *argv[])
 {
 	qputenv("QML_XHR_ALLOW_FILE_WRITE", "1");
-	QGuiApplication app(argc, argv);
+	QApplication app(argc, argv);
 	app.setApplicationName("neutrino-remote");
 	app.setApplicationDisplayName("Neutrino Remote");
 	app.setDesktopFileName(APP_ID);

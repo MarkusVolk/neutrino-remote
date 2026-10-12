@@ -3,13 +3,17 @@
 #include <QByteArray>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QIcon>
 #include <QObject>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QString>
 #include <QStringList>
+#include <QSystemTrayIcon>
 #include <QVariant>
+#include <QWindow>
 
 class Native : public QObject
 {
@@ -57,4 +61,43 @@ public:
 									      : data.toString().toUtf8();
 		return file.write(bytes) == bytes.size();
 	}
+
+	Q_INVOKABLE bool trayAvailable() const { return QSystemTrayIcon::isSystemTrayAvailable(); }
+
+	/* hides the window behind an icon in the panel's tray, a click on it brings it back */
+	Q_INVOKABLE void toTray(QWindow *window)
+	{
+		if (!window)
+			return;
+		if (!m_tray) {
+			m_tray = new QSystemTrayIcon(trayIcon(), this);
+			m_tray->setToolTip("Neutrino Remote");
+			connect(m_tray, &QSystemTrayIcon::activated, this, [this] {
+				m_tray->hide();
+				if (m_window) {
+					m_window->show();
+					m_window->raise();
+					m_window->requestActivate();
+				}
+			});
+		}
+		m_window = window;
+		m_tray->show();
+		window->hide();
+	}
+
+private:
+	/* the symbolic icon of the theme, or the one next to the QML file when run from the source tree */
+	static QIcon trayIcon()
+	{
+		const QString name = QStringLiteral(APP_ID "-symbolic");
+		if (QIcon::hasThemeIcon(name))
+			return QIcon::fromTheme(name);
+		const QString qml = qEnvironmentVariable("NEUTRINO_REMOTE_QML", QML_FILE);
+		const QString file = QFileInfo(qml).dir().filePath("../data/" + name + ".svg");
+		return QFile::exists(file) ? QIcon(file) : QIcon::fromTheme(APP_ID);
+	}
+
+	QSystemTrayIcon *m_tray = nullptr;
+	QWindow *m_window = nullptr;
 };

@@ -25,8 +25,9 @@ if get_option('qt').allowed()
     if qt_dep.found()
       qml_file = pkgdatadir / 'neutrino-remote.qml'
       moc_files = import('qt6').compile_moc(headers: 'qt/native.h', dependencies: qt_dep)
+      widgets_dep = dependency('qt6', modules: ['Widgets'], required: get_option('qt'))
       executable('neutrino-remote-qt', 'qt/main.cpp', moc_files,
-        dependencies: qt_dep,
+        dependencies: [qt_dep, widgets_dep],
         cpp_args: ['-DAPP_ID="' + app_id + '"', '-DQML_FILE="' + qml_file + '"'],
         override_options: ['cpp_std=c++17'],
         install: true,

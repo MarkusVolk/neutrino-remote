@@ -382,8 +382,10 @@ ApplicationWindow {
             TextField {
                 id: hostField
                 Layout.fillWidth: true
+                Layout.minimumWidth: ipWidth.advanceWidth + leftPadding + rightPadding + 8
                 text: root.host
                 placeholderText: "Box address"
+                TextMetrics { id: ipWidth; font: hostField.font; text: "192.168.178.111" }
                 color: root.fg
                 placeholderTextColor: root.dim
                 background: Rectangle { color: root.raised; border.color: hostField.activeFocus ? root.accent : root.line; radius: 4 }
@@ -393,6 +395,16 @@ ApplicationWindow {
                     root.connectTo(text)
                     remoteArea.forceActiveFocus()
                 }
+            }
+            ToolButton {
+                id: trayButton
+                visible: native.trayAvailable()
+                text: "\u2193"
+                ToolTip.visible: hovered
+                ToolTip.text: "Minimize to the tray"
+                contentItem: Text { text: trayButton.text; color: root.fg; font.pixelSize: 18; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                background: Rectangle { color: trayButton.hovered ? root.raised : "transparent"; radius: 4 }
+                onClicked: native.toTray(root)
             }
             ToolButton {
                 id: listButton
