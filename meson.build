@@ -12,6 +12,7 @@ install_data('src/neutrino-remote', install_dir: get_option('bindir'), install_m
 install_data('src/remote.py', install_dir: pkgdatadir)
 install_data('data' / app_id + '.desktop', install_dir: datadir / 'applications')
 install_data('data' / app_id + '.svg', install_dir: datadir / 'icons/hicolor/scalable/apps')
+install_data('data' / app_id + '-symbolic.svg', install_dir: datadir / 'icons/hicolor/symbolic/apps')
 
 if get_option('gtk')
   install_data('gtk/neutrino-remote-gtk.py', install_dir: pkgdatadir)

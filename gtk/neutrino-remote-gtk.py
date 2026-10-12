@@ -30,6 +30,90 @@ entry { background-color: #272c36; color: #d7dce5; }
 .number { color: #8b95a6; font-family: monospace; }
 """
 
+SNI_XML = """
+<node>
+  <interface name="org.kde.StatusNotifierItem">
+    <property name="Category" type="s" access="read"/>
+    <property name="Id" type="s" access="read"/>
+    <property name="Title" type="s" access="read"/>
+    <property name="Status" type="s" access="read"/>
+    <property name="IconName" type="s" access="read"/>
+    <property name="IconThemePath" type="s" access="read"/>
+    <property name="ItemIsMenu" type="b" access="read"/>
+    <property name="Menu" type="o" access="read"/>
+    <method name="Activate"><arg name="x" type="i" direction="in"/><arg name="y" type="i" direction="in"/></method>
+    <method name="SecondaryActivate"><arg name="x" type="i" direction="in"/><arg name="y" type="i" direction="in"/></method>
+    <method name="ContextMenu"><arg name="x" type="i" direction="in"/><arg name="y" type="i" direction="in"/></method>
+    <method name="Scroll"><arg name="delta" type="i" direction="in"/><arg name="orientation" type="s" direction="in"/></method>
+  </interface>
+</node>
+"""
+WATCHER = "org.kde.StatusNotifierWatcher"
+TRAY_ICON = APP_ID + "-symbolic"
+
+
+def tray_icon_dir():
+    """Where the tray icon is: installed next to the program, or data/ of the source tree."""
+    share = os.path.dirname(_here)
+    for d in (os.path.join(share, "icons", "hicolor", "symbolic", "apps"), os.path.join(share, "data")):
+        if os.path.exists(os.path.join(d, TRAY_ICON + ".svg")):
+            return d
+    return ""
+
+
+class Tray:
+    """An icon in the panel's tray (StatusNotifierItem); a click on it calls on_activate."""
+
+    def __init__(self, on_activate):
+        self.on_activate = on_activate
+        self.bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+        self.name = f"org.kde.StatusNotifierItem-{os.getpid()}-1"
+        self.info = Gio.DBusNodeInfo.new_for_xml(SNI_XML).interfaces[0]
+        self.object_id = 0
+        self.owner_id = 0
+
+    def available(self):
+        try:
+            reply = self.bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+                                       "NameHasOwner", GLib.Variant("(s)", (WATCHER,)), None,
+                                       Gio.DBusCallFlags.NONE, -1, None)
+            return reply.unpack()[0]
+        except GLib.Error:
+            return False
+
+    def show(self):
+        if self.object_id:
+            return
+        self.object_id = self.bus.register_object("/StatusNotifierItem", self.info, self.on_call, self.on_property)
+        self.owner_id = Gio.bus_own_name_on_connection(self.bus, self.name, Gio.BusNameOwnerFlags.NONE, None, None)
+        self.bus.call(WATCHER, "/StatusNotifierWatcher", WATCHER, "RegisterStatusNotifierItem",
+                      GLib.Variant("(s)", (self.name,)), None, Gio.DBusCallFlags.NONE, -1, None, None)
+
+    def hide(self):
+        if self.owner_id:
+            Gio.bus_unown_name(self.owner_id)
+            self.owner_id = 0
+        if self.object_id:
+            self.bus.unregister_object(self.object_id)
+            self.object_id = 0
+
+    def on_property(self, _bus, _sender, _path, _iface, prop):
+        return {
+            "Category": GLib.Variant("s", "ApplicationStatus"),
+            "Id": GLib.Variant("s", "neutrino-remote"),
+            "Title": GLib.Variant("s", "Neutrino Remote"),
+            "Status": GLib.Variant("s", "Active"),
+            "IconName": GLib.Variant("s", TRAY_ICON),
+            "IconThemePath": GLib.Variant("s", tray_icon_dir()),
+            "ItemIsMenu": GLib.Variant("b", False),
+            "Menu": GLib.Variant("o", "/NO_DBUSMENU"),
+        }.get(prop)
+
+    def on_call(self, _bus, _sender, _path, _iface, method, _params, invocation):
+        invocation.return_value(None)
+        if method in ("Activate", "SecondaryActivate", "ContextMenu"):
+            self.on_activate()
+
 
 class RemoteView(Gtk.Widget):
     """The remote control picture; a click on a key area sends that key."""
@@ -160,7 +244,7 @@ class Window(Gtk.ApplicationWindow):
 
         header = Gtk.HeaderBar()
         self.set_titlebar(header)
-        self.entry = Gtk.Entry(text=host, placeholder_text="Box address", width_chars=12, hexpand=True)
+        self.entry = Gtk.Entry(text=host, placeholder_text="Box address", width_chars=15, hexpand=True)
         self.entry.set_tooltip_text("IP address or host name of the Neutrino box")
         self.entry.connect("activate", lambda *_: self.connect_to(self.entry.get_text()))
         header.set_title_widget(self.entry)
@@ -168,6 +252,12 @@ class Window(Gtk.ApplicationWindow):
         self.list_button.set_tooltip_text("Channel list")
         self.list_button.connect("toggled", self.on_list_toggled)
         header.pack_end(self.list_button)
+        self.tray = Tray(self.restore)
+        if self.tray.available():
+            tray_button = Gtk.Button(icon_name="go-down-symbolic")
+            tray_button.set_tooltip_text("Minimize to the tray")
+            tray_button.connect("clicked", lambda *_: self.to_tray())
+            header.pack_end(tray_button)
 
         self.view = RemoteView()
         self.view.connect("key", lambda _v, key: self.send_key(key))
@@ -207,6 +297,14 @@ class Window(Gtk.ApplicationWindow):
     def on_map(self, *_):
         self.fit_to_monitor()
         self.set_focus(self.view)
+
+    def to_tray(self):
+        self.tray.show()
+        self.set_visible(False)
+
+    def restore(self):
+        self.tray.hide()
+        self.present()
 
     def monitor(self):
         display = self.get_display()
