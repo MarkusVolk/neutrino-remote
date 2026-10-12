@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls.Basic
+import QtQuick.Controls.impl
 import QtQuick.Layouts
 import QtQuick.Window
 
@@ -324,7 +325,7 @@ ApplicationWindow {
     function loadChannels(index) {
         if (index < 0 || index >= bouquetNumbers.length)
             return
-        get("control/getbouquet?bouquet=" + bouquetNumbers[index] + "&format=json", function(text) {
+        get("control/getbouquet?bouquet=" + bouquetNumbers[index] + "&format=json&epg=true&epginfo=false", function(text) {
             if (text === null)
                 return
             var list
@@ -336,11 +337,37 @@ ApplicationWindow {
             }
             get("control/zapto", function(current) {
                 currentChannel = (current || "").trim()
-                channelModel.clear()
-                for (var i = 0; i < list.length; i++)
-                    channelModel.append({ number: list[i].number, cid: list[i].id, name: list[i].name })
+                var same = channelModel.count === list.length
+                for (var j = 0; same && j < list.length; j++)
+                    same = channelModel.get(j).cid === list[j].id
+                if (!same)
+                    channelModel.clear()
+                for (var i = 0; i < list.length; i++) {
+                    var item = channelItem(list[i])
+                    if (same)
+                        channelModel.set(i, item)
+                    else
+                        channelModel.append(item)
+                }
             })
         })
+    }
+
+    /* a row of the channel list with the programme that is on and the next one */
+    function channelItem(c) {
+        var now = c.firstEPG, next = c.secondEPG
+        var tip = []
+        if (now && now.description)
+            tip.push("Now: " + now.startTime + "  " + now.description)
+        if (next && next.description)
+            tip.push("Next: " + next.startTime + "  " + next.description)
+        var percent = now ? parseInt(now.percentage) : -1
+        return {
+            number: c.number, cid: c.id, name: c.name,
+            epg: now && now.description ? now.startTime + "  " + now.description : "",
+            percent: isNaN(percent) ? -1 : Math.max(0, Math.min(100, percent)),
+            tip: tip.join("\n")
+        }
     }
 
     function zapTo(cid) {
@@ -374,8 +401,10 @@ ApplicationWindow {
     }
 
     header: ToolBar {
+        implicitHeight: toolRow.implicitHeight + 12
         background: Rectangle { color: root.panel; Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root.line } }
         RowLayout {
+            id: toolRow
             anchors.fill: parent
             anchors.margins: 6
             spacing: 6
@@ -397,16 +426,6 @@ ApplicationWindow {
                 }
             }
             ToolButton {
-                id: trayButton
-                visible: native.trayAvailable()
-                text: "\u2193"
-                ToolTip.visible: hovered
-                ToolTip.text: "Minimize to the tray"
-                contentItem: Text { text: trayButton.text; color: root.fg; font.pixelSize: 18; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                background: Rectangle { color: trayButton.hovered ? root.raised : "transparent"; radius: 4 }
-                onClicked: native.toTray(root)
-            }
-            ToolButton {
                 id: listButton
                 checkable: true
                 text: "\u2630"
@@ -420,6 +439,23 @@ ApplicationWindow {
                     if (checked)
                         root.loadBouquets()
                 }
+            }
+            ToolButton {
+                id: trayButton
+                visible: native.trayAvailable()
+                ToolTip.visible: hovered
+                ToolTip.text: "Minimize to the tray"
+                contentItem: IconImage { name: "go-down-symbolic"; color: root.fg; sourceSize: Qt.size(16, 16); fillMode: Image.Pad }
+                background: Rectangle { color: trayButton.hovered ? root.raised : "transparent"; radius: 4 }
+                onClicked: native.toTray(root)
+            }
+            ToolButton {
+                id: closeButton
+                ToolTip.visible: hovered
+                ToolTip.text: "Quit"
+                contentItem: IconImage { name: "window-close-symbolic"; color: root.fg; sourceSize: Qt.size(16, 16); fillMode: Image.Pad }
+                background: Rectangle { color: closeButton.hovered ? root.raised : "transparent"; radius: 4 }
+                onClicked: Qt.quit()
             }
         }
     }
@@ -443,6 +479,13 @@ ApplicationWindow {
                 onActivated: function(index) { root.loadChannels(index) }
             }
 
+            Timer {
+                interval: 60000
+                repeat: true
+                running: sideBar.visible
+                onTriggered: root.loadChannels(bouquetBox.currentIndex)
+            }
+
             ListView {
                 id: channelList
                 Layout.fillWidth: true
@@ -454,15 +497,35 @@ ApplicationWindow {
                     width: channelList.width
                     onClicked: root.zapTo(model.cid)
                     background: Rectangle { color: parent.hovered ? root.raised : "transparent" }
+                    ToolTip.visible: hovered && model.tip !== ""
+                    ToolTip.text: model.tip
+                    ToolTip.delay: 500
                     contentItem: RowLayout {
                         spacing: 8
-                        Text { text: model.number; color: root.dim; font.family: "monospace"; Layout.preferredWidth: 36; horizontalAlignment: Text.AlignRight }
-                        Text {
-                            text: model.name
+                        Text { text: model.number; color: root.dim; font.family: "monospace"; Layout.preferredWidth: 36; Layout.alignment: Qt.AlignTop; horizontalAlignment: Text.AlignRight }
+                        ColumnLayout {
                             Layout.fillWidth: true
-                            elide: Text.ElideRight
-                            color: model.cid === root.currentChannel ? root.accent : root.fg
-                            font.bold: model.cid === root.currentChannel
+                            spacing: 1
+                            Text {
+                                text: model.name
+                                Layout.fillWidth: true
+                                elide: Text.ElideRight
+                                color: model.cid === root.currentChannel ? root.accent : root.fg
+                                font.bold: model.cid === root.currentChannel
+                            }
+                            RowLayout {
+                                visible: model.epg !== ""
+                                Layout.fillWidth: true
+                                spacing: 8
+                                Text { text: model.epg; Layout.fillWidth: true; elide: Text.ElideRight; color: root.dim; font.pointSize: Qt.application.font.pointSize * 0.85 }
+                                Rectangle {
+                                    visible: model.percent >= 0
+                                    Layout.preferredWidth: 48
+                                    Layout.preferredHeight: 3
+                                    color: root.line
+                                    Rectangle { width: parent.width * model.percent / 100; height: parent.height; color: root.accent }
+                                }
+                            }
                         }
                     }
                 }

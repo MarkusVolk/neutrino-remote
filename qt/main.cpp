@@ -13,6 +13,7 @@ int main(int argc, char *argv[])
 	app.setApplicationName("neutrino-remote");
 	app.setApplicationDisplayName("Neutrino Remote");
 	app.setDesktopFileName(APP_ID);
+	QIcon::setFallbackThemeName("Adwaita");
 	app.setWindowIcon(QIcon::fromTheme(APP_ID));
 
 	QQmlApplicationEngine engine;
