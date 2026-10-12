@@ -28,6 +28,10 @@ entry { background-color: #272c36; color: #d7dce5; }
 .error { color: #e79a9a; }
 .current { color: #67aee8; font-weight: bold; }
 .number { color: #8b95a6; font-family: monospace; }
+.epg { color: #8b95a6; font-size: smaller; }
+progressbar.epg trough, progressbar.epg progress { min-height: 3px; }
+progressbar.epg trough { background-color: #333a47; }
+progressbar.epg progress { background-color: #67aee8; }
 """
 
 SNI_XML = """
@@ -251,13 +255,14 @@ class Window(Gtk.ApplicationWindow):
         self.list_button = Gtk.ToggleButton(icon_name="view-list-symbolic")
         self.list_button.set_tooltip_text("Channel list")
         self.list_button.connect("toggled", self.on_list_toggled)
-        header.pack_end(self.list_button)
+        self.epg_timer = 0
         self.tray = Tray(self.restore)
         if self.tray.available():
             tray_button = Gtk.Button(icon_name="go-down-symbolic")
             tray_button.set_tooltip_text("Minimize to the tray")
             tray_button.connect("clicked", lambda *_: self.to_tray())
             header.pack_end(tray_button)
+        header.pack_end(self.list_button)
 
         self.view = RemoteView()
         self.view.connect("key", lambda _v, key: self.send_key(key))
@@ -467,6 +472,8 @@ class Window(Gtk.ApplicationWindow):
         self.fit_to_monitor()
         if button.get_active():
             self.load_bouquets()
+            if not self.epg_timer:
+                self.epg_timer = GLib.timeout_add_seconds(60, self.refresh_epg)
 
     def load_bouquets(self):
         def done(text):
@@ -501,23 +508,57 @@ class Window(Gtk.ApplicationWindow):
                 return
             self.get("control/zapto", lambda current: self.fill_channels(channels, (current or "").strip()))
 
-        self.get(f"control/getbouquet?bouquet={number}&format=json", done)
+        self.get(f"control/getbouquet?bouquet={number}&format=json&epg=true&epginfo=false", done)
 
     def fill_channels(self, channels, current):
-        self.channel_list.remove_all()
-        for number, cid, name in channels:
-            row = Gtk.ListBoxRow()
-            row.channel_id = cid
-            box = Gtk.Box(spacing=8, margin_start=6, margin_end=6, margin_top=3, margin_bottom=3)
-            num = Gtk.Label(label=number, width_chars=4, xalign=1)
-            num.add_css_class("number")
-            label = Gtk.Label(label=name, xalign=0, ellipsize=3, hexpand=True)
-            if cid == current:
-                label.add_css_class("current")
-            box.append(num)
-            box.append(label)
-            row.set_child(box)
-            self.channel_list.append(row)
+        rows = []
+        child = self.channel_list.get_first_child()
+        while child:
+            rows.append(child)
+            child = child.get_next_sibling()
+        if [r.channel_id for r in rows] != [c["id"] for c in channels]:
+            self.channel_list.remove_all()
+            rows = [self.channel_row(c) for c in channels]
+            for row in rows:
+                self.channel_list.append(row)
+        for row, channel in zip(rows, channels):
+            (row.name_label.add_css_class if channel["id"] == current else row.name_label.remove_css_class)("current")
+            now = channel["now"]
+            row.epg_box.set_visible(now is not None)
+            if now:
+                row.epg_label.set_label(f"{now['start']}  {now['title']}")
+                row.epg_bar.set_visible(now["percent"] >= 0)
+                row.epg_bar.set_fraction(max(now["percent"], 0) / 100)
+            row.set_tooltip_text(remote.epg_tooltip(channel))
+
+    def channel_row(self, channel):
+        row = Gtk.ListBoxRow()
+        row.channel_id = channel["id"]
+        box = Gtk.Box(spacing=8, margin_start=6, margin_end=6, margin_top=3, margin_bottom=3)
+        num = Gtk.Label(label=channel["number"], width_chars=4, xalign=1, valign=Gtk.Align.START)
+        num.add_css_class("number")
+        text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True)
+        row.name_label = Gtk.Label(label=channel["name"], xalign=0, ellipsize=3)
+        row.epg_label = Gtk.Label(xalign=0, ellipsize=3, hexpand=True)
+        row.epg_label.add_css_class("epg")
+        row.epg_bar = Gtk.ProgressBar(valign=Gtk.Align.CENTER, width_request=48)
+        row.epg_bar.add_css_class("epg")
+        row.epg_box = Gtk.Box(spacing=8)
+        row.epg_box.append(row.epg_label)
+        row.epg_box.append(row.epg_bar)
+        text.append(row.name_label)
+        text.append(row.epg_box)
+        box.append(num)
+        box.append(text)
+        row.set_child(box)
+        return row
+
+    def refresh_epg(self):
+        if not self.side.get_visible():
+            self.epg_timer = 0
+            return False
+        self.on_bouquet()
+        return True
 
     def on_channel(self, _list, row):
         def done(result):
@@ -526,8 +567,7 @@ class Window(Gtk.ApplicationWindow):
             self.show_status("Switched channel")
             child = self.channel_list.get_first_child()
             while child:
-                label = child.get_child().get_last_child()
-                (label.add_css_class if child is row else label.remove_css_class)("current")
+                (child.name_label.add_css_class if child is row else child.name_label.remove_css_class)("current")
                 child = child.get_next_sibling()
 
         self.get("control/zapto?" + row.channel_id, done)

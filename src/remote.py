@@ -164,9 +164,31 @@ def parse_bouquets(text):
     return [(b["number"], b["name"]) for b in data.get("bouquets", [])]
 
 
+def _event(epg):
+    if not isinstance(epg, dict) or not epg.get("description"):
+        return None
+    try:
+        percent = max(0, min(100, int(epg.get("percentage", -1))))
+    except ValueError:
+        percent = -1
+    return {"start": epg.get("startTime", ""), "title": epg["description"], "percent": percent}
+
+
 def parse_channels(text):
+    """The channels of a bouquet from getbouquet?format=json[&epg=true], each with the
+    programme that is on (now) and the next one, where the box knows them."""
     data = json.loads(text).get("data", {})
-    return [(c["number"], c["id"], c["name"]) for c in data.get("channels", [])]
+    return [{"number": c["number"], "id": c["id"], "name": c["name"],
+             "now": _event(c.get("firstEPG")), "next": _event(c.get("secondEPG"))}
+            for c in data.get("channels", [])]
+
+
+def epg_tooltip(channel):
+    lines = []
+    for label, event in (("Now", channel["now"]), ("Next", channel["next"])):
+        if event:
+            lines.append(f"{label}: {event['start']}  {event['title']}")
+    return "\n".join(lines) or None
 
 
 KEYBOARD = {
