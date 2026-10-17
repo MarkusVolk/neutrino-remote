@@ -4,6 +4,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QIcon>
+#include <QImage>
 #include <QNetworkAccessManager>
 #include <QNetworkCookie>
 #include <QNetworkCookieJar>
@@ -72,6 +73,19 @@ public:
 	}
 
 	Q_INVOKABLE void copyText(const QString &text) const { QGuiApplication::clipboard()->setText(text); }
+
+	/* a PNG as a data URL for an Image, or nothing when it is transparent all over */
+	Q_INVOKABLE QString osdImage(const QByteArray &png) const
+	{
+		QImage image = QImage::fromData(png).convertToFormat(QImage::Format_ARGB32);
+		for (int y = 0; y < image.height(); y++) {
+			const QRgb *line = reinterpret_cast<const QRgb *>(image.constScanLine(y));
+			for (int x = 0; x < image.width(); x++)
+				if (qAlpha(line[x]))
+					return QStringLiteral("data:image/png;base64,") + QString::fromLatin1(png.toBase64());
+		}
+		return QString();
+	}
 
 	/* the cookies the requests of QML carry, kept by the engine's network access */
 	Q_INVOKABLE void setCookie(const QString &url, const QString &name, const QString &value) const

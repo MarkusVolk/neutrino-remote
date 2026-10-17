@@ -343,12 +343,12 @@ class Window(Gtk.ApplicationWindow):
         self.side.append(self.bouquets)
         self.osd = Gtk.Picture(content_fit=Gtk.ContentFit.CONTAIN, can_shrink=True)
         self.osd.set_tooltip_text("Screen of the box")
-        osd_frame = Gtk.AspectFrame(ratio=16 / 9, obey_child=False)
-        osd_frame.set_child(self.osd)
+        self.osd_frame = Gtk.AspectFrame(ratio=16 / 9, obey_child=False, visible=False)
+        self.osd_frame.set_child(self.osd)
         self.split = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL, vexpand=True,
                                shrink_start_child=False, shrink_end_child=True)
         self.split.set_start_child(scroll)
-        self.split.set_end_child(osd_frame)
+        self.split.set_end_child(self.osd_frame)
         self.split_placed = False
         self.side.append(self.split)
         self.side.set_visible(False)
@@ -674,9 +674,15 @@ class Window(Gtk.ApplicationWindow):
         def on_image(data):
             if data:
                 try:
-                    self.osd.set_paintable(Gdk.Texture.new_from_bytes(GLib.Bytes.new(data)))
+                    texture = Gdk.Texture.new_from_bytes(GLib.Bytes.new(data))
                 except GLib.Error:
-                    pass
+                    texture = None
+                if texture:
+                    pixels, _stride = Gdk.TextureDownloader.new(texture).download_bytes()
+                    pixels = pixels.get_data()
+                    blank = pixels.count(0) == len(pixels)
+                    self.osd.set_paintable(None if blank else texture)
+                    self.osd_frame.set_visible(not blank)
             shown()
 
         shot = f"{remote.osd_shot_path(self.api)}&at={int(time.time() * 1000) % 2 ** 32}"

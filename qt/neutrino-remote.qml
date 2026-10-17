@@ -33,6 +33,7 @@ ApplicationWindow {
     property bool osdBusy: false
     property bool osdAgain: false
     property int osdShown: 0
+    property bool osdBlank: true
     property real lastKey: 0
     /* the box speaks the REST API of /api/v1 (as ni-neutrino does), or only the old
      * control API of nhttpd; which one is asked once on connecting */
@@ -480,8 +481,18 @@ ApplicationWindow {
         }
         osdBusy = true
         var back = osdShown === 0 ? osdB : osdA
+        /* a shot that is transparent all over means the box shows nothing; the list then takes its place */
+        var show = function(data) {
+            var source = data ? native.osdImage(data) : ""
+            if (data)
+                osdBlank = source === ""
+            if (source === "")
+                osdDone()
+            else
+                back.source = source
+        }
         if (!legacy) {
-            back.source = base + osdShot + "&at=" + (Date.now() % 4294967296)
+            fetchImage(osdShot + "&at=" + (Date.now() % 4294967296), show)
             return
         }
         get(legacyShot, function(r) {
@@ -489,8 +500,23 @@ ApplicationWindow {
                 osdDone()
                 return
             }
-            back.source = base + legacyImage + "?" + Date.now()
+            fetchImage(legacyImage + "?" + Date.now(), show)
         }, true)
+    }
+
+    function fetchImage(path, callback) {
+        var xhr = new XMLHttpRequest()
+        var t = token()
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === XMLHttpRequest.DONE)
+                callback(Math.floor(xhr.status / 100) === 2 ? xhr.response : null)
+        }
+        xhr.timeout = 5000
+        xhr.open("GET", base + path)
+        xhr.responseType = "arraybuffer"
+        if (t)
+            xhr.setRequestHeader("Authorization", "Bearer " + t)
+        xhr.send()
     }
 
     function osdDone() {
@@ -941,6 +967,7 @@ ApplicationWindow {
                 }
 
                 Item {
+                    visible: !root.osdBlank
                     SplitView.preferredHeight: Math.min(split.width * 9 / 16, split.height * 0.7)
                     ToolTip.visible: osdHover.hovered
                     ToolTip.text: "Screen of the box"
