@@ -877,6 +877,56 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 model: []
                 onActivated: function(index) { root.loadChannels(index) }
+                contentItem: Text {
+                    leftPadding: 10
+                    rightPadding: bouquetBox.indicator.width + 16
+                    text: bouquetBox.displayText
+                    color: root.fg
+                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                }
+                indicator: IconImage {
+                    x: bouquetBox.width - width - 10
+                    y: (bouquetBox.height - height) / 2
+                    name: "pan-down-symbolic"
+                    color: root.fg
+                    sourceSize: Qt.size(16, 16)
+                }
+                background: Rectangle {
+                    implicitHeight: 34
+                    color: bouquetBox.hovered ? root.line : root.raised
+                    border.color: bouquetBox.activeFocus ? root.accent : root.line
+                    radius: 4
+                }
+                delegate: ItemDelegate {
+                    id: bouquetItem
+                    required property var modelData
+                    required property int index
+                    width: ListView.view.width
+                    highlighted: bouquetBox.highlightedIndex === index
+                    contentItem: Text {
+                        text: bouquetItem.modelData
+                        color: bouquetItem.index === bouquetBox.currentIndex ? root.accent : root.fg
+                        font.bold: bouquetItem.index === bouquetBox.currentIndex
+                        elide: Text.ElideRight
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle { color: bouquetItem.highlighted ? root.line : "transparent"; radius: 4 }
+                }
+                popup: Popup {
+                    y: bouquetBox.height + 2
+                    width: bouquetBox.width
+                    height: Math.min(contentItem.implicitHeight + 2 * padding, root.height * 0.7)
+                    padding: 4
+                    contentItem: ListView {
+                        clip: true
+                        implicitHeight: contentHeight
+                        model: bouquetBox.popup.visible ? bouquetBox.delegateModel : null
+                        currentIndex: bouquetBox.highlightedIndex
+                        ScrollBar.vertical: ScrollBar {}
+                    }
+                    background: Rectangle { color: root.panel; border.color: root.line; radius: 4 }
+                }
             }
 
             Timer {
