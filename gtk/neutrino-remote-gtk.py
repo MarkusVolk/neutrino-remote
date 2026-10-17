@@ -401,6 +401,7 @@ class Window(Gtk.ApplicationWindow):
         header = 48
         view_h = int(area.height * 0.6) - header
         width = max(260, int(view_h * self.aspect) + 24)
+        self.view.set_size_request(width if self.side.get_visible() else -1, -1)
         if self.side.get_visible():
             side = max(320, int(area.width * 0.25))
             self.side.set_size_request(side, -1)
@@ -762,6 +763,10 @@ class Window(Gtk.ApplicationWindow):
             self.grab_osd()
             if not self.osd_idle:
                 self.osd_idle = GLib.timeout_add_seconds(remote.OSD_IDLE, self.idle_osd)
+        elif self.get_mapped():
+            # GTK keeps a size the compositor has once confirmed; shown anew, the window takes its default size
+            self.set_visible(False)
+            self.set_visible(True)
 
     def load_bouquets(self):
         self.retry_api(lambda _switched: self.fetch_bouquets())
