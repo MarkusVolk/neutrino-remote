@@ -522,7 +522,29 @@ ApplicationWindow {
         }
     }
 
+    /* a box first met on the control API is asked again for the REST API, which it may
+       only have lacked while Neutrino was starting; then(true) once it answers */
+    function retryApi(then) {
+        if (!legacy) {
+            then(false)
+            return
+        }
+        get("api/v1/system/info", function(text) {
+            if (text === null) {
+                then(false)
+                return
+            }
+            legacy = false
+            showStatus("Connected to " + host)
+            then(true)
+        }, true)
+    }
+
     function loadBouquets() {
+        retryApi(function() { fetchBouquets() })
+    }
+
+    function fetchBouquets() {
         get(legacy ? "control/getbouquets?format=json" : "api/v1/bouquets", function(text) {
             if (text === null)
                 return
@@ -835,7 +857,12 @@ ApplicationWindow {
                 interval: 60000
                 repeat: true
                 running: sideBar.visible
-                onTriggered: root.loadChannels(bouquetBox.currentIndex)
+                onTriggered: root.retryApi(function(switched) {
+                    if (switched)
+                        root.loadBouquets()
+                    else
+                        root.loadChannels(bouquetBox.currentIndex)
+                })
             }
 
             SplitView {

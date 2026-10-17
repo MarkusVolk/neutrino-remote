@@ -764,6 +764,9 @@ class Window(Gtk.ApplicationWindow):
                 self.osd_idle = GLib.timeout_add_seconds(remote.OSD_IDLE, self.idle_osd)
 
     def load_bouquets(self):
+        self.retry_api(lambda _switched: self.fetch_bouquets())
+
+    def fetch_bouquets(self):
         def done(text):
             if text is None:
                 return
@@ -932,8 +935,25 @@ class Window(Gtk.ApplicationWindow):
         if not self.side.get_visible():
             self.epg_timer = 0
             return False
-        self.on_bouquet()
+        self.retry_api(lambda switched: self.load_bouquets() if switched else self.on_bouquet())
         return True
+
+    def retry_api(self, then):
+        """A box first met on the control API is asked again for the REST API, which it
+        may only have lacked while Neutrino was starting; then(True) once it answers."""
+        if self.api != remote.CONTROL:
+            then(False)
+            return
+
+        def probed(text):
+            if text is None:
+                then(False)
+                return
+            self.api = remote.API
+            self.show_status(f"Connected to {self.host}")
+            then(True)
+
+        self.get(remote.PROBE_PATH, probed, quiet=True)
 
     def on_channel(self, _list, row):
         def done(result):
