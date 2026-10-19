@@ -28,6 +28,7 @@
   {"key": "KEY_RIGHT", "label": "", "title": "Right", "shape": "rect", "coords": [128, 336, 164, 384], "icon": "pan-end-symbolic"},
   {"key": "KEY_DOWN", "label": "", "title": "Down", "shape": "rect", "coords": [76, 390, 124, 420], "icon": "pan-down-symbolic"},
   {"key": "KEY_INFO", "label": "Info", "title": "Info", "shape": "rect", "coords": [20, 430, 70, 456]},
+  {"key": "KEY_PVR", "label": "PVR", "title": "Recordings", "shape": "rect", "coords": [77, 430, 123, 456]},
   {"key": "KEY_EPG", "label": "EPG", "title": "EPG", "shape": "rect", "coords": [130, 430, 180, 456]},
   {"key": "KEY_VOLUMEUP", "label": "Vol +", "title": "Volume up", "shape": "rect", "coords": [20, 470, 70, 496]},
   {"key": "KEY_VOLUMEDOWN", "label": "Vol −", "title": "Volume down", "shape": "rect", "coords": [20, 502, 70, 528]},
