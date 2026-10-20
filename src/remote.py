@@ -257,12 +257,15 @@ def bouquets_path(api):
 
 
 def parse_bouquets(api, text):
-    """The bouquets that hold television channels, as (number, name)."""
+    """The bouquets that hold television channels, as (number, name, web); the web
+    channel lists come first, as in the web interface."""
     if api == API:
-        return [(b["id"], b["name"]) for b in json.loads(text).get("items", [])
-                if not b.get("hidden") and b.get("tv_count", 0) > 0]
+        items = [b for b in json.loads(text).get("items", [])
+                 if not b.get("hidden") and b.get("tv_count", 0) > 0]
+        items.sort(key=lambda b: b.get("kind", "dvb") == "dvb")
+        return [(b["id"], b["name"], b.get("kind", "dvb") != "dvb") for b in items]
     data = json.loads(text).get("data", {})
-    return [(b["number"], b["name"]) for b in data.get("bouquets", [])]
+    return [(b["number"], b["name"], False) for b in data.get("bouquets", [])]
 
 
 def channels_path(bouquet, cursor=None):
@@ -305,9 +308,10 @@ def _event(event, now):
             "percent": percent, "end": start + duration, "id": event["id"], "begin": start}
 
 
-def build_channels(channels, grid):
+def build_channels(channels, grid, epg_first=False):
     """The channels of a bouquet from the REST API, each with the programme that is
-    on (now) and the next one, where the box knows them."""
+    on (now) and the next one, where the box knows them; with epg_first the channels
+    with a programme come first, as the web interface lists the web channels."""
     now = int(time.time())
     events = {row["channel_id"]: sorted(row.get("events", []), key=lambda e: int(e["start"]))
               for row in grid}
@@ -319,6 +323,8 @@ def build_channels(channels, grid):
         out.append({"number": str(c["number"]), "id": c["id"], "name": c["name"],
                     "now": _event(current[0] if current else None, now),
                     "next": _event(upcoming[0] if upcoming else None, now)})
+    if epg_first:
+        out.sort(key=lambda c: c["now"] is None and c["next"] is None)
     return out
 
 

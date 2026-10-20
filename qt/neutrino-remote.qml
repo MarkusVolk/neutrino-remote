@@ -26,6 +26,7 @@ ApplicationWindow {
     property string statusText: ""
     property bool statusError: false
     property var bouquetNumbers: []
+    property var bouquetWeb: []
     property string currentChannel: ""
     property real aspect: 188 / 762
     property int canvasW: 0
@@ -578,13 +579,17 @@ ApplicationWindow {
             try {
                 if (legacy)
                     list = (JSON.parse(text).data.bouquets || []).map(function(b) { return { id: b.number, name: b.name } })
-                else
+                else {
                     list = (JSON.parse(text).items || []).filter(function(b) { return !b.hidden && b.tv_count > 0 })
+                    list = list.filter(function(b) { return b.kind && b.kind !== "dvb" })
+                        .concat(list.filter(function(b) { return !b.kind || b.kind === "dvb" }))
+                }
             } catch (e) {
                 showStatus("Bouquet list not readable", true)
                 return
             }
             bouquetNumbers = list.map(function(b) { return b.id })
+            bouquetWeb = list.map(function(b) { return !!b.kind && b.kind !== "dvb" })
             bouquetBox.model = list.map(function(b) { return b.name })
             if (list.length > 0) {
                 bouquetBox.currentIndex = 0
@@ -597,6 +602,7 @@ ApplicationWindow {
         if (index < 0 || index >= bouquetNumbers.length)
             return
         var number = bouquetNumbers[index]
+        var web = bouquetWeb[index]
         if (legacy) {
             loadLegacyChannels(number)
             return
@@ -619,7 +625,11 @@ ApplicationWindow {
                     } catch (e) {
                         currentChannel = ""
                     }
-                    fillChannels(list.map(function(c) { return channelItem(c, events[c.id] || []) }))
+                    var items = list.map(function(c) { return channelItem(c, events[c.id] || []) })
+                    if (web)
+                        items = items.filter(function(c) { return c.tip !== "" })
+                            .concat(items.filter(function(c) { return c.tip === "" }))
+                    fillChannels(items)
                 }, true)
             }, true)
         })

@@ -335,6 +335,7 @@ class Window(Gtk.ApplicationWindow):
         self.bouquets = Gtk.DropDown.new_from_strings([])
         self.bouquets.connect("notify::selected", self.on_bouquet)
         self.bouquet_numbers = []
+        self.bouquet_web = []
         self.channel_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
         self.channel_list.connect("row-activated", self.on_channel)
         scroll = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
@@ -786,8 +787,9 @@ class Window(Gtk.ApplicationWindow):
             except (ValueError, KeyError):
                 self.show_status("Bouquet list not readable", True)
                 return
-            self.bouquet_numbers = [number for number, _ in bouquets]
-            self.bouquets.set_model(Gtk.StringList.new([name for _, name in bouquets]))
+            self.bouquet_numbers = [number for number, _, _ in bouquets]
+            self.bouquet_web = [web for _, _, web in bouquets]
+            self.bouquets.set_model(Gtk.StringList.new([name for _, name, _ in bouquets]))
             if bouquets:
                 self.bouquets.set_selected(0)
                 self.on_bouquet()
@@ -799,6 +801,7 @@ class Window(Gtk.ApplicationWindow):
         if index >= len(self.bouquet_numbers):
             return
         number = self.bouquet_numbers[index]
+        web = self.bouquet_web[index]
         api = self.api
 
         def with_current(channels):
@@ -827,7 +830,7 @@ class Window(Gtk.ApplicationWindow):
 
         def with_channels(channels):
             self.get_all(lambda cursor: remote.grid_path(number, cursor),
-                         lambda grid: with_current(remote.build_channels(channels, grid or [])), quiet=True)
+                         lambda grid: with_current(remote.build_channels(channels, grid or [], web)), quiet=True)
 
         self.get_all(lambda cursor: remote.channels_path(number, cursor),
                      lambda channels: channels is not None and with_channels(channels))
