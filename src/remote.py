@@ -213,7 +213,6 @@ def area_bounds(area):
 
 
 OSD_AFTER_KEY = (250, 2000)
-OSD_IDLE = 5
 EPG_WINDOW = 6 * 3600
 
 # The box speaks the REST API of /api/v1 (as ni-neutrino does), or only the old
@@ -226,7 +225,7 @@ CONTROL_PROBE_PATH = "control/info"
 
 def osd_shot_path(api):
     if api == API:
-        return "api/v1/osd/screenshot?osd=true&video=false&format=png"
+        return "api/v1/osd/screenshot?osd=true&video=false&crop=true&format=png"
     return "control/screenshot?name=neutrino-remote&osd=1&video=0&format=png"
 
 

@@ -356,8 +356,6 @@ class Window(Gtk.ApplicationWindow):
         self.osd_timers = []
         self.osd_busy = False
         self.osd_again = False
-        self.osd_idle = 0
-        self.last_key = 0
 
         box = Gtk.Box(spacing=6)
         box.append(left)
@@ -640,7 +638,6 @@ class Window(Gtk.ApplicationWindow):
     def follow_osd(self):
         """The screen follows the last key of a row: a shot when the keys have stopped
         for a moment, and one more for a channel change."""
-        self.last_key = time.monotonic()
         for timer in self.osd_timers:
             GLib.source_remove(timer)
         self.osd_timers = [GLib.timeout_add(ms, self.osd_timeout) for ms in remote.OSD_AFTER_KEY]
@@ -649,14 +646,6 @@ class Window(Gtk.ApplicationWindow):
         self.osd_timers = self.osd_timers[1:]
         self.grab_osd()
         return False
-
-    def idle_osd(self):
-        if not self.side.get_visible():
-            self.osd_idle = 0
-            return False
-        if time.monotonic() - self.last_key > remote.OSD_AFTER_KEY[-1] / 1000:
-            self.grab_osd()
-        return True
 
     def grab_osd(self):
         if not self.side.get_visible():
@@ -768,8 +757,6 @@ class Window(Gtk.ApplicationWindow):
             if not self.epg_timer:
                 self.epg_timer = GLib.timeout_add_seconds(60, self.refresh_epg)
             self.grab_osd()
-            if not self.osd_idle:
-                self.osd_idle = GLib.timeout_add_seconds(remote.OSD_IDLE, self.idle_osd)
         elif self.get_mapped():
             # GTK keeps a size the compositor has once confirmed; shown anew, the window takes its default size
             self.set_visible(False)

@@ -35,7 +35,6 @@ ApplicationWindow {
     property bool osdAgain: false
     property int osdShown: 0
     property bool osdBlank: true
-    property real lastKey: 0
     /* the box speaks the REST API of /api/v1 (as ni-neutrino does), or only the old
      * control API of nhttpd; which one is asked once on connecting */
     property bool legacy: false
@@ -43,7 +42,7 @@ ApplicationWindow {
     property string csrf: ""
     property var waiting: []
     readonly property string sessionCookie: "ni-web-session"
-    readonly property string osdShot: "api/v1/osd/screenshot?osd=true&video=false&format=png"
+    readonly property string osdShot: "api/v1/osd/screenshot?osd=true&video=false&crop=true&format=png"
     readonly property string legacyShot: "control/screenshot?name=neutrino-remote&osd=1&video=0&format=png"
     readonly property string legacyImage: "tmp/neutrino-remote.png"
     readonly property int epgWindow: 6 * 3600
@@ -468,7 +467,6 @@ ApplicationWindow {
     /* the screen follows the last key of a row: a shot when the keys have stopped
      * for a moment, and one more for a channel change */
     function followOsd() {
-        lastKey = Date.now()
         osdSoon.restart()
         osdLate.restart()
     }
@@ -539,15 +537,6 @@ ApplicationWindow {
 
     Timer { id: osdSoon; interval: 250; onTriggered: root.grabOsd() }
     Timer { id: osdLate; interval: 2000; onTriggered: root.grabOsd() }
-    Timer {
-        interval: 5000
-        repeat: true
-        running: sideBar.visible
-        onTriggered: {
-            if (Date.now() - root.lastKey > 2000)
-                root.grabOsd()
-        }
-    }
 
     /* a box first met on the control API is asked again for the REST API, which it may
        only have lacked while Neutrino was starting; then(true) once it answers */
