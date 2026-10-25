@@ -21,6 +21,7 @@
   {"key": "KEY_YELLOW", "label": "", "title": "Yellow", "shape": "rect", "coords": [104, 230, 138, 248], "color": "#d4ac0d"},
   {"key": "KEY_BLUE", "label": "", "title": "Blue", "shape": "rect", "coords": [146, 230, 180, 248], "color": "#2e86c1"},
   {"key": "KEY_SETUP", "label": "Menu", "title": "Menu", "shape": "rect", "coords": [20, 264, 70, 290]},
+  {"key": "KEY_WWW", "label": "WWW", "title": "Web channels", "shape": "rect", "coords": [77, 264, 123, 290]},
   {"key": "KEY_HOME", "label": "Exit", "title": "Exit", "shape": "rect", "coords": [130, 264, 180, 290]},
   {"key": "KEY_UP", "label": "", "title": "Up", "shape": "rect", "coords": [76, 300, 124, 330], "icon": "pan-up-symbolic"},
   {"key": "KEY_LEFT", "label": "", "title": "Left", "shape": "rect", "coords": [36, 336, 72, 384], "icon": "pan-start-symbolic"},
