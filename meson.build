@@ -8,7 +8,7 @@ app_id = 'de.flk.NeutrinoRemote'
 datadir = get_option('prefix') / get_option('datadir')
 pkgdatadir = datadir / meson.project_name()
 
-install_data('src/neutrino-remote', install_dir: get_option('bindir'), install_mode: 'rwxr-xr-x')
+install_data('src/neutrino-remote', 'src/neutrino-cli', install_dir: get_option('bindir'), install_mode: 'rwxr-xr-x')
 install_data('src/remote.py', 'data/remote-layout.json', install_dir: pkgdatadir)
 install_data('data' / app_id + '.desktop', install_dir: datadir / 'applications')
 install_data('data' / app_id + '.svg', install_dir: datadir / 'icons/hicolor/scalable/apps')

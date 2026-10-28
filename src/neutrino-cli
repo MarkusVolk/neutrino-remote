@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+"""neutrino-cli - the tools of a Neutrino box in a terminal.
+
+    neutrino-cli [--box HOST] [--json] list
+    neutrino-cli [--box HOST] help TOOL
+    neutrino-cli [--box HOST] [--json] TOOL [NAME=VALUE ...]
+    neutrino-cli [--box HOST] login [USER] | logout
+
+The tools are those the box offers its assistant and MCP clients under /api/v1/tools; a TOOL
+may be named without its tv_ prefix. Values are typed by the tool's description: numbers,
+true/false, and a list by repeating the name or as one value with / between the elements.
+The box is --box, else $NEUTRINO_BOX, else the one of neutrino-remote; a token or a sign-in
+kept by neutrino-remote is used, else the box decides by the network the caller is in.
+
+Exit status: 0 done, 1 the tool failed, 2 wrong use, 3 the box refused or did not answer."""
+
+import getpass
+import json
+import os
+import sys
+import textwrap
+import urllib.error
+import urllib.parse
+import urllib.request
+
+SHARE = os.environ.get("NEUTRINO_REMOTE_SHARE") or os.path.join(
+    os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "share", "neutrino-remote")
+sys.path.insert(0, SHARE)
+import remote  # noqa: E402
+
+TOOLS_PATH = "api/v1/tools"
+TIMEOUT = 30
+
+
+class Refused(Exception):
+    """The box answered with an error or not at all."""
+
+
+class Usage(Exception):
+    """The command line does not fit."""
+
+
+def request(host, method, path, body=None):
+    """A request to the box's REST API, signed in the way neutrino-remote is; the answer as JSON."""
+    headers = {"Accept": "application/json"}
+    token = remote.load_token(host)
+    login = None if token else remote.load_session(host)
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    elif login:
+        headers["Cookie"] = f"{remote.SESSION_COOKIE}={login[0]}"
+        headers[remote.CSRF_HEADER] = login[1]
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    url = urllib.parse.urljoin(remote.base_url(host), path)
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, data, headers, method=method),
+                                    timeout=TIMEOUT) as answer:
+            text = answer.read().decode("utf-8", "replace")
+            cookie = answer.headers.get("Set-Cookie")
+    except urllib.error.HTTPError as error:
+        text = error.read().decode("utf-8", "replace")
+        try:
+            detail = json.loads(text).get("detail") or text
+        except ValueError:
+            detail = text or error.reason
+        if error.code in (401, 403) and login:
+            remote.clear_session(host)
+        hint = "; sign in with: neutrino-cli login" if error.code in (401, 403) else ""
+        raise Refused(f"{host}: {error.code} {detail}{hint}") from None
+    except (urllib.error.URLError, OSError) as error:
+        raise Refused(f"{host}: {getattr(error, 'reason', error)}") from None
+    try:
+        return json.loads(text) if text.strip() else {}, cookie
+    except ValueError:
+        raise Refused(f"{host}: the answer is not JSON") from None
+
+
+def tools(host):
+    return {tool["name"]: tool for tool in request(host, "GET", TOOLS_PATH)[0]}
+
+
+def find_tool(all_tools, name):
+    for candidate in (name, "tv_" + name):
+        if candidate in all_tools:
+            return all_tools[candidate]
+    names = ", ".join(short(n) for n in sorted(all_tools))
+    raise Usage(f"no tool {name}; the box has: {names}")
+
+
+def short(name):
+    return name[3:] if name.startswith("tv_") else name
+
+
+def kind(spec):
+    if spec.get("type") == "array":
+        return "list of " + spec.get("items", {}).get("type", "string") + "s"
+    return spec.get("type", "string")
+
+
+def value_of(name, spec, text):
+    """One value as the tool's description types it."""
+    wanted = spec.get("items", {}).get("type", "string") if spec.get("type") == "array" else spec.get("type")
+    if wanted == "integer":
+        try:
+            return int(text)
+        except ValueError:
+            raise Usage(f"{name} takes a whole number, not {text!r}") from None
+    if wanted == "number":
+        try:
+            return float(text)
+        except ValueError:
+            raise Usage(f"{name} takes a number, not {text!r}") from None
+    if wanted == "boolean":
+        lowered = text.lower()
+        if lowered in ("true", "yes", "on", "1"):
+            return True
+        if lowered in ("false", "no", "off", "0"):
+            return False
+        raise Usage(f"{name} takes true or false, not {text!r}")
+    return text
+
+
+def arguments(tool, words):
+    """NAME=VALUE words as the arguments object the tool takes."""
+    schema = tool.get("schema") or {}
+    props = schema.get("properties") or {}
+    given = {}
+    for word in words:
+        name, sep, text = word.partition("=")
+        if not sep:
+            raise Usage(f"{word!r} is not NAME=VALUE")
+        if name not in props:
+            known = ", ".join(props) or "none"
+            raise Usage(f"{short(tool['name'])} takes no {name}; it takes: {known}")
+        given.setdefault(name, []).append(text)
+    args = {}
+    for name, texts in given.items():
+        spec = props[name]
+        if spec.get("type") == "array":
+            if len(texts) == 1:
+                texts = texts[0].split("/")
+            args[name] = [value_of(name, spec, text) for text in texts if text]
+        elif len(texts) > 1:
+            raise Usage(f"{name} is given more than once")
+        else:
+            args[name] = value_of(name, spec, texts[0])
+    missing = [name for name in schema.get("required", []) if name not in args]
+    if missing:
+        raise Usage(f"{short(tool['name'])} needs {', '.join(missing)}")
+    return args
+
+
+def show_list(all_tools):
+    width = max(len(short(name)) for name in all_tools)
+    for name in sorted(all_tools):
+        first = all_tools[name].get("description", "").split(". ")[0].split(": ")[0].rstrip(".")
+        line = f"{short(name):<{width}}  {first}"
+        print(line if len(line) <= 100 else line[:96] + " ...")
+
+
+def show_help(tool):
+    print(f"{short(tool['name'])} ({tool['name']}), needs the level {tool.get('level', 'write')}")
+    print(textwrap.fill(tool.get("description", ""), 78))
+    schema = tool.get("schema") or {}
+    props = schema.get("properties") or {}
+    if not props:
+        print("\nNo parameters.")
+        return
+    print("\nParameters:")
+    required = set(schema.get("required", []))
+    width = max(len(name) for name in props)
+    for name, spec in props.items():
+        print(f"  {name:<{width}}  {kind(spec)}" + (", required" if name in required else ""))
+        if spec.get("description"):
+            print(textwrap.fill(spec["description"], 78, initial_indent="      ", subsequent_indent="      "))
+
+
+def login(host, user):
+    password = getpass.getpass(f"Password of {user} on {host}: ")
+    answer, cookie = request(host, "POST", remote.LOGIN_PATH, {"user": user, "password": password})
+    session = remote.session_cookie(cookie)
+    csrf = answer.get("csrf", "") if isinstance(answer, dict) else ""
+    if not session or not csrf:
+        raise Refused(f"{host}: the box opened no session")
+    remote.save_session(host, session, csrf)
+    print(f"signed in to {host}")
+
+
+def main(argv):
+    host = os.environ.get("NEUTRINO_BOX") or remote.load_host()
+    raw = False
+    while argv and argv[0].startswith("-"):
+        option = argv.pop(0)
+        if option in ("-h", "--help"):
+            print(__doc__.strip())
+            return 0
+        if option == "--json":
+            raw = True
+        elif option == "--box" and argv:
+            host = argv.pop(0)
+        elif option.startswith("--box="):
+            host = option[6:]
+        else:
+            raise Usage(f"unknown option {option}")
+    if not argv:
+        raise Usage("a command is missing; see neutrino-cli --help")
+    command, words = argv[0], argv[1:]
+
+    if command == "login":
+        login(host, words[0] if words else remote.LOGIN_USER)
+        return 0
+    if command == "logout":
+        remote.clear_session(host)
+        return 0
+    all_tools = tools(host)
+    if command == "list":
+        if raw:
+            print(json.dumps(list(all_tools.values()), indent=2, ensure_ascii=False))
+        else:
+            show_list(all_tools)
+        return 0
+    if command == "help":
+        if len(words) != 1:
+            raise Usage("help takes one tool")
+        show_help(find_tool(all_tools, words[0]))
+        return 0
+
+    tool = find_tool(all_tools, command)
+    args = arguments(tool, words)
+    answer = request(host, "POST", f"{TOOLS_PATH}/{urllib.parse.quote(tool['name'])}", args)[0]
+    if raw:
+        print(json.dumps(answer, indent=2, ensure_ascii=False))
+    else:
+        print(answer.get("text", "").rstrip("\n"))
+    return 0 if answer.get("ok") else 1
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except Usage as error:
+        print(f"neutrino-cli: {error}", file=sys.stderr)
+        sys.exit(2)
+    except Refused as error:
+        print(f"neutrino-cli: {error}", file=sys.stderr)
+        sys.exit(3)
+    except KeyboardInterrupt:
+        sys.exit(130)
